@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SubSense - Configure</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="logo">🎬 SubSense</div>
+        <div class="nav-links">
+            <a href="/configure" class="active">Configure</a>
+            <a href="/stats">Stats</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header">
+            <h1>🎬 SubSense</h1>
+            <p class="subtitle">Subtitle aggregator for Stremio</p>
+        </div>
+
+        <div class="card">
+            <h2>⚙️ Configuration</h2>
+            
+            <div class="form-group">
+                <label for="primaryLang">Primary Language *</label>
+                <select id="primaryLang" required>
+                    <!-- Populated by JS -->
+                </select>
+                <p class="hint">Your preferred subtitle language</p>
+            </div>
+
+            <div class="form-group">
+                <label for="secondaryLang">Secondary Language (Optional)</label>
+                <select id="secondaryLang">
+                    <option value="none">None</option>
+                    <!-- Populated by JS -->
+                </select>
+                <p class="hint">Fallback language if primary is not available</p>
+            </div>
+
+            <button class="btn btn-primary" id="installBtn">
+                📥 Install in Stremio
+            </button>
+        </div>
+
+        <div class="card">
+            <h2>ℹ️ About</h2>
+            <p>SubSense aggregates subtitles from multiple sources using <strong>Wyzie Subs</strong>.</p>
+            <p style="margin-top: 10px;">
+                Supported content: Movies, TV Series, Anime<br>
+                Sources: OpenSubtitles, SubDL, Subscene, and more
+            </p>
+        </div>
+
+        <div id="installUrl" class="card" style="display: none;">
+            <h2>📋 Manual Install</h2>
+            <p>If the button didn't work, copy this URL and paste it in Stremio:</p>
+            <input type="text" id="urlDisplay" readonly style="margin-top: 10px;">
+            <button class="btn btn-secondary" style="margin-top: 10px; width: 100%;" onclick="copyUrl()">
+                📋 Copy URL
+            </button>
+        </div>
+
+        <div class="footer">
+            <p>Powered by <a href="https://sub.wyzie.ru/" target="_blank">Wyzie Subs</a></p>
+        </div>
+    </div>
+
+    <script src="/js/configure.js"></script>
+</body>
+</html>

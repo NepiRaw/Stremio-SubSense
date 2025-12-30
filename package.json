@@ -1,0 +1,31 @@
+{
+  "name": "subsense",
+  "version": "1.0.0",
+  "description": "Stremio subtitle addon that aggregates subtitles from multiple sources",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "subtitles",
+    "sub",
+    "SubSense"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@cospired/i18n-iso-languages": "^4.2.0",
+    "ass-compiler": "^0.1.16",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "stremio-addon-sdk": "^1.6.10",
+    "subsrt-ts": "^2.1.2",
+    "wyzie-lib": "^2.2.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

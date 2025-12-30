@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SubSense - Statistics</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="logo">🎬 SubSense</div>
+        <div class="nav-links">
+            <a href="/configure">Configure</a>
+            <a href="/stats" class="active">Stats</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header">
+            <h1>📊 Statistics</h1>
+            <p class="subtitle">Real-time addon metrics</p>
+        </div>
+
+        <!-- Auto-refresh toggle -->
+        <div class="toggle-container">
+            <label class="toggle-switch">
+                <input type="checkbox" id="autoRefresh" checked>
+                <span class="toggle-slider"></span>
+            </label>
+            <span>Auto-refresh (30s)</span>
+            <span id="lastUpdated" style="margin-left: auto; color: var(--text-muted); font-size: 0.9rem;"></span>
+        </div>
+
+        <!-- Stats Overview -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="value" id="totalRequests">0</div>
+                <div class="label">Total Requests</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="movieRequests">0</div>
+                <div class="label">Movies</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="seriesRequests">0</div>
+                <div class="label">Series</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="totalSubtitles">0</div>
+                <div class="label">Subtitles Served</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="avgFetchTime">0ms</div>
+                <div class="label">Avg Fetch Time</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="uptime">0s</div>
+                <div class="label">Uptime</div>
+            </div>
+        </div>
+
+        <!-- Language Matching Stats -->
+        <div class="card">
+            <h2>🎯 Language Matching</h2>
+            <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+                <div class="stat-card">
+                    <div class="value" id="primarySuccessRate">0%</div>
+                    <div class="label">Primary Found Rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value" id="secondarySuccessRate">0%</div>
+                    <div class="label">Secondary Found Rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value" id="primaryFound">0</div>
+                    <div class="label">Primary Found</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value" id="primaryNotFound">0</div>
+                    <div class="label">Primary Not Found</div>
+                </div>
+            </div>
+            <div style="margin-top: 15px;">
+                <h4 style="color: var(--text-secondary); margin-bottom: 10px;">Top Successful Languages</h4>
+                <div id="topLanguages" style="display: flex; flex-wrap: wrap; gap: 10px;">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div class="chart-container">
+                <h3>Subtitles by Source</h3>
+                <canvas id="sourceChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Subtitles by Language</h3>
+                <canvas id="langChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Fetch Time Chart -->
+        <div class="chart-container">
+            <h3>Recent Fetch Times (ms)</h3>
+            <canvas id="timingChart"></canvas>
+        </div>
+
+        <!-- Daily Activity -->
+        <div class="card">
+            <h2>📅 Recent Activity</h2>
+            <table class="data-table" id="dailyTable">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Total</th>
+                        <th>Movies</th>
+                        <th>Series</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Errors -->
+        <div class="card" id="errorsCard" style="display: none;">
+            <h2>⚠️ Recent Errors</h2>
+            <table class="data-table" id="errorsTable">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            <p>SubSense v1.0.0 | <a href="/stats/json" target="_blank">Raw JSON</a></p>
+        </div>
+    </div>
+
+    <script src="/js/stats.js"></script>
+</body>
+</html>
