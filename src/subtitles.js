@@ -5,6 +5,22 @@ const statsService = require('./stats');
 
 const MAX_SUBTITLES = parseInt(process.env.MAX_SUBTITLES, 10) || 30;
 
+// Cache modules (Phase 2)
+const ENABLE_CACHE = process.env.ENABLE_CACHE !== 'false';
+let subtitleCache = null;
+let statsDB = null;
+
+if (ENABLE_CACHE) {
+    try {
+        const cache = require('./cache');
+        subtitleCache = cache.subtitleCache;
+        statsDB = cache.statsDB;
+        log('info', 'Subtitle cache enabled');
+    } catch (error) {
+        log('warn', `Cache disabled: ${error.message}`);
+    }
+}
+
 // Flag to use fast-first strategy (can be made configurable later)
 const USE_FAST_FIRST = true;
 
@@ -16,6 +32,7 @@ const USE_FAST_FIRST = true;
  */
 async function handleSubtitles(args, config) {
     const startTime = Date.now();
+    let cacheHit = false;
     
     try {
         // Parse the Stremio ID
@@ -26,19 +43,67 @@ async function handleSubtitles(args, config) {
         const primaryWyzie = mapStremioToWyzie(config.primaryLang);
         const secondaryWyzie = config.secondaryLang !== 'none' ? mapStremioToWyzie(config.secondaryLang) : null;
 
-        let rawSubtitles;
+        let rawSubtitles = [];
         let backgroundPromise = null;
 
-        if (USE_FAST_FIRST) {
-            // Fast-first strategy: parallel queries, return on threshold
-            const result = await fetchSubtitlesFastFirst(parsed, primaryWyzie, secondaryWyzie);
-            rawSubtitles = result.subtitles;
-            backgroundPromise = result.backgroundPromise;
-            log('info', `Fast-first: got ${rawSubtitles.length} subtitles${result.fromCache ? ' (cached)' : ''}`);
-        } else {
-            // Legacy: fetch all at once
-            rawSubtitles = await fetchSubtitles(parsed);
-            log('debug', `Fetched ${rawSubtitles.length} raw subtitles from providers`);
+        // Check cache first (Phase 2) - check both primary and secondary
+        if (subtitleCache && primaryWyzie) {
+            const cachedPrimary = subtitleCache.get(parsed.imdbId, parsed.season, parsed.episode, primaryWyzie);
+            const cachedSecondary = secondaryWyzie 
+                ? subtitleCache.get(parsed.imdbId, parsed.season, parsed.episode, secondaryWyzie)
+                : null;
+            
+            // Merge cached results from both languages
+            if (cachedPrimary && cachedPrimary.subtitles.length > 0) {
+                rawSubtitles = [...cachedPrimary.subtitles];
+                cacheHit = true;
+                log('info', `Cache HIT (primary): ${cachedPrimary.subtitles.length} subtitles for ${parsed.imdbId} (${primaryWyzie})`);
+                
+                if (cachedPrimary.needsRefresh) {
+                    log('debug', 'Primary cache stale, triggering background refresh');
+                    backgroundPromise = refreshCacheInBackground(parsed, primaryWyzie, secondaryWyzie);
+                }
+            }
+            
+            if (cachedSecondary && cachedSecondary.subtitles.length > 0) {
+                rawSubtitles = [...rawSubtitles, ...cachedSecondary.subtitles];
+                log('info', `Cache HIT (secondary): ${cachedSecondary.subtitles.length} subtitles for ${parsed.imdbId} (${secondaryWyzie})`);
+                
+                // If primary wasn't found but secondary was, still consider it a partial hit
+                if (!cacheHit) {
+                    cacheHit = true;
+                }
+            }
+            
+            if (cacheHit && statsDB) {
+                statsDB.increment('cache_hits');
+                statsDB.recordDaily({ cacheHits: 1 });
+            }
+        }
+
+        // If no cache hit, fetch from providers
+        if (!cacheHit) {
+            if (statsDB) {
+                statsDB.increment('cache_misses');
+                statsDB.recordDaily({ cacheMisses: 1 });
+            }
+
+            if (USE_FAST_FIRST) {
+                // Fast-first strategy: parallel queries, return on threshold
+                const result = await fetchSubtitlesFastFirst(parsed, primaryWyzie, secondaryWyzie);
+                rawSubtitles = result.subtitles;
+                backgroundPromise = result.backgroundPromise;
+                log('info', `Fast-first: got ${rawSubtitles.length} subtitles${result.fromCache ? ' (cached)' : ''}`);
+            } else {
+                // Legacy: fetch all at once
+                rawSubtitles = await fetchSubtitles(parsed);
+                log('debug', `Fetched ${rawSubtitles.length} raw subtitles from providers`);
+            }
+
+            // Store in cache per language - cache ALL languages for any future user
+            if (subtitleCache && rawSubtitles.length > 0) {
+                cacheSubtitlesByLanguage(parsed, rawSubtitles);
+            }
         }
 
         // Prioritize by language (fast-first already filters, but this adds sorting)
@@ -61,9 +126,15 @@ async function handleSubtitles(args, config) {
 
         log('debug', `Returning ${formatted.length} subtitles in ${fetchTimeMs}ms`);
 
-        // Fire-and-forget: let background complete for caching
-        if (backgroundPromise) {
-            backgroundPromise.catch(err => log('debug', `Background fetch error: ${err.message}`));
+        // Fire-and-forget: handle background fetch completion to cache ALL languages
+        if (backgroundPromise && !cacheHit) {
+            backgroundPromise
+                .then(backgroundSubtitles => {
+                    if (backgroundSubtitles && backgroundSubtitles.length > 0) {
+                        cacheSubtitlesByLanguage(parsed, backgroundSubtitles);
+                    }
+                })
+                .catch(err => log('debug', `Background fetch error: ${err.message}`));
         }
 
         return { subtitles: formatted };
@@ -303,6 +374,55 @@ function formatForStremio(subtitles) {
         }
         return valid;
     }); // Only return subs with valid URLs
+}
+
+/**
+ * Refresh cache in background (fire-and-forget)
+ * @param {Object} parsed - Parsed Stremio ID
+ * @param {string} primaryLang - Primary language code
+ * @param {string|null} secondaryLang - Secondary language code
+ * @returns {Promise} Background fetch promise
+ */
+async function refreshCacheInBackground(parsed, primaryLang, secondaryLang) {
+    try {
+        log('debug', `Background refresh starting for ${parsed.imdbId}`);
+        
+        const result = await fetchSubtitlesFastFirst(parsed, primaryLang, secondaryLang);
+        
+        if (result.subtitles.length > 0 && subtitleCache) {
+            // Cache ALL languages for future users
+            cacheSubtitlesByLanguage(parsed, result.subtitles);
+            log('debug', `Background refresh complete: ${result.subtitles.length} total subtitles`);
+        }
+    } catch (error) {
+        log('warn', `Background refresh error: ${error.message}`);
+    }
+}
+
+/**
+ * Cache subtitles grouped by language - caches ALL languages for any future user
+ * @param {Object} parsed - Parsed Stremio ID
+ * @param {Array} subtitles - Array of subtitle objects
+ */
+function cacheSubtitlesByLanguage(parsed, subtitles) {
+    if (!subtitleCache || !subtitles || subtitles.length === 0) return;
+    
+    // Group subtitles by language
+    const byLang = {};
+    for (const sub of subtitles) {
+        const subLang = (sub.lang || sub.language || '').toLowerCase().substring(0, 2);
+        if (!subLang) continue; // Skip if no language
+        if (!byLang[subLang]) byLang[subLang] = [];
+        byLang[subLang].push(sub);
+    }
+    
+    // Cache each language separately
+    const languages = Object.keys(byLang);
+    for (const lang of languages) {
+        subtitleCache.set(parsed.imdbId, parsed.season, parsed.episode, lang, byLang[lang]);
+    }
+    
+    log('debug', `Cached subtitles for ${languages.length} languages: ${languages.join(', ')} (${subtitles.length} total)`);
 }
 
 module.exports = {

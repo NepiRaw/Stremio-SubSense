@@ -12,6 +12,16 @@ const { convertToSrt, isAssFormat } = require('./src/services/subtitle-converter
 const app = express();
 const PORT = process.env.PORT || 3100;
 
+// Start cache cleaner (Phase 2)
+if (process.env.ENABLE_CACHE !== 'false') {
+    try {
+        const { startCleaner } = require('./src/cache');
+        startCleaner();
+    } catch (error) {
+        log('warn', `Cache cleaner not started: ${error.message}`);
+    }
+}
+
 // Local URL for internal proxy calls (always localhost)
 const LOCAL_BASE_URL = `http://127.0.0.1:${PORT}`;
 

@@ -25,7 +25,7 @@ const DEFAULT_SOURCES = ['opensubtitles', 'subdl', 'subf2m', 'podnapisi', 'anime
 
 // Fast-first configuration (can be made configurable later)
 const FAST_FIRST_CONFIG = {
-    minSubtitles: 3,  // Return when we have at least X subtitles
+    minSubtitles: 1,  // Return when we have at least X subtitles
     enabled: true     // Enable fast-first strategy
 };
 
@@ -199,7 +199,7 @@ class WyzieProvider extends BaseProvider {
                 if (!state.resolved && state.primarySubtitles.length >= this.minSubtitles) {
                     state.resolved = true;
                     const fetchTimeMs = Date.now() - startTime;
-                    log('info', `[WyzieProvider] Fast-first: returning ${state.primarySubtitles.length} primary subs in ${fetchTimeMs}ms`);
+                    log('info', `[WyzieProvider] Fast-first: returning ${state.primarySubtitles.length} primary subs in ${fetchTimeMs}ms (threshold met)`);
                     resolve(state.primarySubtitles.slice(0, this.minSubtitles * 10)); // Return up to 10x threshold
                 }
             };
@@ -214,6 +214,25 @@ class WyzieProvider extends BaseProvider {
 
             // Also check after each source completes (via handleSourceResult callback)
             state.checkThreshold = checkThreshold;
+        });
+
+        // Primary sources done promise: resolves when all primary-lang queries finish
+        const primaryDonePromise = Promise.allSettled(sourcePromises).then(() => {
+            if (!state.resolved) {
+                state.resolved = true;
+                const fetchTimeMs = Date.now() - startTime;
+                if (state.primarySubtitles.length > 0) {
+                    log('info', `[WyzieProvider] Fast-first: ${state.primarySubtitles.length} primary subs in ${fetchTimeMs}ms (all sources done)`);
+                    return state.primarySubtitles;
+                } else if (secondaryLang && state.secondarySubtitles.length > 0) {
+                    log('info', `[WyzieProvider] Fast-first: ${state.secondarySubtitles.length} secondary subs in ${fetchTimeMs}ms (fallback)`);
+                    return state.secondarySubtitles;
+                } else {
+                    log('warn', `[WyzieProvider] Fast-first: no subs found after ${fetchTimeMs}ms`);
+                    return [];
+                }
+            }
+            return state.primarySubtitles;
         });
 
         // Background promise: wait for ALL language sources to complete (for caching)
@@ -239,19 +258,10 @@ class WyzieProvider extends BaseProvider {
             return backgroundState.allSubtitles;
         });
 
-        // Wait for fast result or all sources to complete
+        // Wait for fast result (threshold) or all primary sources to complete
         const raceResult = await Promise.race([
             fastResultPromise,
-            backgroundPromise.then(() => {
-                // All sources done, return what we have
-                if (state.primarySubtitles.length > 0) {
-                    return state.primarySubtitles;
-                } else if (secondaryLang && state.secondarySubtitles.length > 0) {
-                    log('info', `[WyzieProvider] No primary subs, falling back to secondary`);
-                    return state.secondarySubtitles;
-                }
-                return state.allSubtitles;
-            })
+            primaryDonePromise
         ]);
 
         return {
