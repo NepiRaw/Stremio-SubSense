@@ -4,71 +4,152 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SubSense - Configure</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/logo.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/logo.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <nav class="navbar">
-        <div class="logo">🎬 SubSense</div>
-        <div class="nav-links">
-            <a href="/configure" class="active">Configure</a>
-            <a href="/stats">Stats</a>
-        </div>
-    </nav>
-
     <div class="container">
-        <div class="header">
-            <h1>🎬 SubSense</h1>
-            <p class="subtitle">Subtitle aggregator for Stremio</p>
-        </div>
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-container">
+                <img src="/logo.png" alt="SubSense" class="logo-img">
+                <h1 class="title">SubSense</h1>
+            </div>
+            <span class="version" id="versionBadge">Loading...</span>
+            <p class="tagline">Stremio addon that aggregates subtitles for selected languages from multiple sources.</p>
+            <nav class="nav-links">
+                <a href="/configure" class="active">Configure</a>
+                <a href="/stats">Stats</a>
+            </nav>
+        </header>
 
+        <!-- Configuration Card -->
         <div class="card">
-            <h2>⚙️ Configuration</h2>
-            
+            <h2 class="card-title">
+                <svg viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+                Language Configuration
+            </h2>
+
+            <!-- Primary Language -->
             <div class="form-group">
-                <label for="primaryLang">Primary Language *</label>
-                <select id="primaryLang" required>
-                    <!-- Populated by JS -->
-                </select>
-                <p class="hint">Your preferred subtitle language</p>
+                <label for="primaryLang">Primary Language</label>
+                <div class="dropdown" id="primaryDropdown">
+                    <button type="button" class="dropdown-btn" id="primaryBtn">
+                        <span>Select Language</span>
+                        <svg class="dropdown-arrow" viewBox="0 0 24 24">
+                            <path d="M7 10l5 5 5-5z"/>
+                        </svg>
+                    </button>
+                    <div class="dropdown-content" id="primaryContent"></div>
+                </div>
+                <input type="hidden" id="primaryLang" value="">
             </div>
 
+            <!-- Secondary Language -->
             <div class="form-group">
                 <label for="secondaryLang">Secondary Language (Optional)</label>
-                <select id="secondaryLang">
-                    <option value="none">None</option>
-                    <!-- Populated by JS -->
-                </select>
-                <p class="hint">Fallback language if primary is not available</p>
+                <div class="dropdown" id="secondaryDropdown">
+                    <button type="button" class="dropdown-btn" id="secondaryBtn">
+                        <span>None</span>
+                        <svg class="dropdown-arrow" viewBox="0 0 24 24">
+                            <path d="M7 10l5 5 5-5z"/>
+                        </svg>
+                    </button>
+                    <div class="dropdown-content" id="secondaryContent"></div>
+                </div>
+                <input type="hidden" id="secondaryLang" value="none">
             </div>
 
-            <button class="btn btn-primary" id="installBtn">
-                📥 Install in Stremio
-            </button>
+            <!-- Install Button with Dropdown -->
+            <div class="install-container">
+                <div class="install-button-wrapper">
+                    <button type="button" class="install-btn" id="installBtn" disabled>
+                        <svg viewBox="0 0 24 24">
+                            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                        </svg>
+                        Install Addon
+                    </button>
+                    <button type="button" class="dropdown-toggle-btn" id="installDropdownToggle" disabled>
+                        <svg viewBox="0 0 24 24">
+                            <path d="M7 10l5 5 5-5z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="install-dropdown-menu" id="installDropdownMenu">
+                    <div class="install-dropdown-item" id="installDirectly">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                        </svg>
+                        Install in Stremio
+                    </div>
+                    <div class="install-dropdown-item" id="copyUrl">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                        </svg>
+                        Copy Manifest URL
+                    </div>
+                </div>
+            </div>
         </div>
 
+        <!-- Subtitle Sources Card -->
         <div class="card">
-            <h2>ℹ️ About</h2>
-            <p>SubSense aggregates subtitles from multiple sources using <strong>Wyzie Subs</strong>.</p>
-            <p style="margin-top: 10px;">
-                Supported content: Movies, TV Series, Anime<br>
-                Sources: OpenSubtitles, SubDL, Subscene, and more
-            </p>
+            <h2 class="card-title">
+                <svg viewBox="0 0 24 24">
+                    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 7h2v2H7zm0 4h2v2H7zm0 4h2v2H7zm4-8h6v2h-6zm0 4h6v2h-6zm0 4h6v2h-6z"/>
+                </svg>
+                Subtitle Sources
+            </h2>
+            <p class="sources-description">This addon aggregates subtitles from multiple trusted sources:</p>
+            <div class="sources-grid">
+                <div class="source-item">
+                    <img src="https://www.opensubtitles.org/favicon.ico" alt="OpenSubtitles" class="source-logo">
+                    <span class="source-name">OpenSubtitles</span>
+                </div>
+                <div class="source-item">
+                    <img src="https://subdl.com/favicon.ico" alt="SubDL" class="source-logo">
+                    <span class="source-name">SubDL</span>
+                </div>
+                <div class="source-item">
+                    <img src="https://github.com/nRafinia/Emby.Subtitle.Subf2m/blob/main/src/Emby.Subtitle.Subf2m/thumb.png?raw=true" alt="Subf2m" class="source-logo">
+                    <span class="source-name">Subf2m</span>
+                </div>
+                <div class="source-item">
+                    <img src="https://www.podnapisi.net/static/favicon.ico" alt="Podnapisi" class="source-logo">
+                    <span class="source-name">Podnapisi</span>
+                </div>
+                <div class="source-item">
+                    <img src="https://gestdown.readme.io/favicon.ico" alt="Gestdown" class="source-logo">
+                    <span class="source-name">Gestdown</span>
+                </div>
+                <div class="source-item">
+                    <img src="https://animetosho.org/inc/favicon.ico" alt="AnimeTosho" class="source-logo">
+                    <span class="source-name">AnimeTosho</span>
+                </div>
+            </div>
         </div>
 
-        <div id="installUrl" class="card" style="display: none;">
-            <h2>📋 Manual Install</h2>
-            <p>If the button didn't work, copy this URL and paste it in Stremio:</p>
-            <input type="text" id="urlDisplay" readonly style="margin-top: 10px;">
-            <button class="btn btn-secondary" style="margin-top: 10px; width: 100%;" onclick="copyUrl()">
-                📋 Copy URL
-            </button>
-        </div>
-
-        <div class="footer">
-            <p>Powered by <a href="https://sub.wyzie.ru/" target="_blank">Wyzie Subs</a></p>
-        </div>
+        <!-- Footer -->
+        <footer class="footer">
+            <a href="https://github.com/NepiRaw" target="_blank" class="github-link">
+                <svg viewBox="0 0 24 24">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+                NepiRaw
+            </a>
+        </footer>
     </div>
 
-    <script src="/js/configure.js"></script>
+    <!-- Toast notification -->
+    <div class="toast" id="toast">URL copied to clipboard!</div>
+
+    <script src="js/configure.js"></script>
 </body>
 </html>

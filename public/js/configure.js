@@ -36,139 +36,361 @@ const LANGUAGES = [
     { code: 'may', name: 'Malay' }
 ];
 
+// State
+let primaryLang = '';
+let secondaryLang = 'none';
+
 // DOM Elements
-const primarySelect = document.getElementById('primaryLang');
-const secondarySelect = document.getElementById('secondaryLang');
+const primaryBtn = document.getElementById('primaryBtn');
+const primaryContent = document.getElementById('primaryContent');
+const primaryInput = document.getElementById('primaryLang');
+const secondaryBtn = document.getElementById('secondaryBtn');
+const secondaryContent = document.getElementById('secondaryContent');
+const secondaryInput = document.getElementById('secondaryLang');
 const installBtn = document.getElementById('installBtn');
-const installUrlDiv = document.getElementById('installUrl');
-const urlDisplay = document.getElementById('urlDisplay');
+const installDropdownToggle = document.getElementById('installDropdownToggle');
+const installDropdownMenu = document.getElementById('installDropdownMenu');
+const installDirectly = document.getElementById('installDirectly');
+const copyUrlBtn = document.getElementById('copyUrl');
+const versionBadge = document.getElementById('versionBadge');
+const toast = document.getElementById('toast');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    populateLanguages();
+    fetchVersion();
+    populateDropdowns();
     setupEventListeners();
 });
 
 /**
- * Populate language dropdowns
+ * Fetch version from API
  */
-function populateLanguages() {
-    // Add placeholder option for primary language (user must select)
-    const placeholderOption = document.createElement('option');
-    placeholderOption.value = '';
-    placeholderOption.textContent = '-- Select Language --';
-    placeholderOption.disabled = true;
-    placeholderOption.selected = true;
-    primarySelect.appendChild(placeholderOption);
+async function fetchVersion() {
+    try {
+        const response = await fetch('/api/version');
+        const data = await response.json();
+        versionBadge.textContent = `v${data.version}`;
+    } catch (error) {
+        console.error('Failed to fetch version:', error);
+        versionBadge.textContent = 'v?.?.?';
+    }
+}
 
-    // Primary language options
-    LANGUAGES.forEach(lang => {
-        const option = document.createElement('option');
-        option.value = lang.code;
-        option.textContent = lang.name;
-        primarySelect.appendChild(option);
+/**
+ * Populate language dropdowns with search
+ */
+function populateDropdowns() {
+    // Create primary dropdown with search
+    createSearchableDropdown(primaryContent, LANGUAGES, (code, name) => selectPrimaryLanguage(code, name), 'primary');
+    
+    // Create secondary dropdown with search (includes "None")
+    const secondaryLanguages = [{ code: 'none', name: 'None' }, ...LANGUAGES];
+    createSearchableDropdown(secondaryContent, secondaryLanguages, (code, name) => selectSecondaryLanguage(code, name), 'secondary');
+}
+
+/**
+ * Create a searchable dropdown
+ */
+function createSearchableDropdown(container, languages, onSelect, type) {
+    // Clear container
+    container.innerHTML = '';
+    
+    // Create search input wrapper
+    const searchWrapper = document.createElement('div');
+    searchWrapper.className = 'dropdown-search';
+    
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Type to search...';
+    searchInput.id = `${type}Search`;
+    searchWrapper.appendChild(searchInput);
+    container.appendChild(searchWrapper);
+    
+    // Create items wrapper
+    const itemsWrapper = document.createElement('div');
+    itemsWrapper.className = 'dropdown-items';
+    itemsWrapper.id = `${type}Items`;
+    
+    // Add language items
+    languages.forEach((lang, index) => {
+        const item = document.createElement('div');
+        item.className = 'dropdown-item' + (type === 'secondary' && lang.code === 'none' ? ' selected' : '');
+        item.dataset.value = lang.code;
+        item.textContent = lang.name;
+        item.addEventListener('click', () => onSelect(lang.code, lang.name));
+        itemsWrapper.appendChild(item);
     });
-
-    // Secondary language options (includes "None")
-    LANGUAGES.forEach(lang => {
-        const option = document.createElement('option');
-        option.value = lang.code;
-        option.textContent = lang.name;
-        secondarySelect.appendChild(option);
+    
+    container.appendChild(itemsWrapper);
+    
+    // Add search functionality
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value.toLowerCase();
+        const items = itemsWrapper.querySelectorAll('.dropdown-item');
+        
+        items.forEach(item => {
+            const text = item.textContent.toLowerCase();
+            if (text.includes(query)) {
+                item.classList.remove('hidden');
+            } else {
+                item.classList.add('hidden');
+            }
+        });
     });
-
-    // No default for primary - user must select
-    // Secondary defaults to 'none'
-    secondarySelect.value = 'none';
+    
+    // Prevent dropdown close when clicking search input
+    searchInput.addEventListener('click', (e) => {
+        e.stopPropagation();
+    });
 }
 
 /**
  * Setup event listeners
  */
 function setupEventListeners() {
-    // Update secondary options when primary changes
-    primarySelect.addEventListener('change', updateSecondaryOptions);
+    // Primary dropdown toggle
+    primaryBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleDropdown('primary');
+    });
 
-    // Install button click
+    // Secondary dropdown toggle
+    secondaryBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleDropdown('secondary');
+    });
+
+    // Install dropdown toggle
+    installDropdownToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleInstallDropdown();
+    });
+
+    // Install button (main action)
     installBtn.addEventListener('click', installAddon);
+
+    // Install directly from dropdown
+    installDirectly.addEventListener('click', installAddon);
+
+    // Copy URL
+    copyUrlBtn.addEventListener('click', copyManifestUrl);
+
+    // Close dropdowns when clicking outside
+    document.addEventListener('click', closeAllDropdowns);
 }
 
 /**
- * Disable the same language in secondary dropdown
+ * Toggle a dropdown
  */
-function updateSecondaryOptions() {
-    const primaryValue = primarySelect.value;
-
-    // Enable all options first
-    Array.from(secondarySelect.options).forEach(option => {
-        option.disabled = false;
-    });
-
-    // Disable the primary language in secondary
-    const matchingOption = secondarySelect.querySelector(`option[value="${primaryValue}"]`);
-    if (matchingOption) {
-        matchingOption.disabled = true;
-        
-        // If currently selected, reset to 'none'
-        if (secondarySelect.value === primaryValue) {
-            secondarySelect.value = 'none';
+function toggleDropdown(type) {
+    closeAllDropdowns();
+    
+    if (type === 'primary') {
+        primaryBtn.classList.toggle('active');
+        primaryContent.classList.toggle('show');
+        if (primaryContent.classList.contains('show')) {
+            const searchInput = document.getElementById('primarySearch');
+            if (searchInput) {
+                setTimeout(() => searchInput.focus(), 50);
+            }
+        }
+    } else if (type === 'secondary') {
+        secondaryBtn.classList.toggle('active');
+        secondaryContent.classList.toggle('show');
+        if (secondaryContent.classList.contains('show')) {
+            const searchInput = document.getElementById('secondarySearch');
+            if (searchInput) {
+                setTimeout(() => searchInput.focus(), 50);
+            }
         }
     }
 }
 
 /**
- * Generate install URL and open Stremio
+ * Toggle install dropdown
  */
-function installAddon() {
-    const primary = primarySelect.value;
-    const secondary = secondarySelect.value;
-
-    // Validate primary language is selected
-    if (!primary) {
-        alert('Please select a primary language before installing.');
-        primarySelect.focus();
-        return;
-    }
-
-    // Build config object (Stremio SDK expects JSON-encoded config in URL)
-    const config = {
-        primaryLang: primary,
-        secondaryLang: secondary
-    };
-
-    // URL-encode the JSON config (this is how Stremio SDK parses it)
-    const configString = encodeURIComponent(JSON.stringify(config));
-
-    // Get current host
-    const host = window.location.host;
-    const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
-
-    // Build URLs
-    const manifestUrl = `${protocol}://${host}/${configString}/manifest.json`;
-    const stremioUrl = `stremio://${host}/${configString}/manifest.json`;
-
-    // Try to open Stremio
-    window.location.href = stremioUrl;
-
-    // Show manual install option after a delay
-    setTimeout(() => {
-        urlDisplay.value = manifestUrl;
-        installUrlDiv.style.display = 'block';
-    }, 1000);
+function toggleInstallDropdown() {
+    installDropdownToggle.classList.toggle('active');
+    installDropdownMenu.classList.toggle('show');
 }
 
 /**
- * Copy URL to clipboard
+ * Close all dropdowns
  */
-function copyUrl() {
-    urlDisplay.select();
-    urlDisplay.setSelectionRange(0, 99999);
+function closeAllDropdowns() {
+    primaryBtn.classList.remove('active');
+    primaryContent.classList.remove('show');
+    secondaryBtn.classList.remove('active');
+    secondaryContent.classList.remove('show');
+    installDropdownToggle.classList.remove('active');
+    installDropdownMenu.classList.remove('show');
     
-    navigator.clipboard.writeText(urlDisplay.value).then(() => {
-        alert('URL copied to clipboard!');
-    }).catch(() => {
-        // Fallback for older browsers
-        document.execCommand('copy');
-        alert('URL copied to clipboard!');
+    // Clear search inputs and show all items
+    clearDropdownSearch('primary');
+    clearDropdownSearch('secondary');
+}
+
+/**
+ * Clear search input and reset items visibility
+ */
+function clearDropdownSearch(type) {
+    const searchInput = document.getElementById(`${type}Search`);
+    const itemsWrapper = document.getElementById(`${type}Items`);
+    
+    if (searchInput) {
+        searchInput.value = '';
+    }
+    
+    if (itemsWrapper) {
+        itemsWrapper.querySelectorAll('.dropdown-item').forEach(item => {
+            item.classList.remove('hidden');
+        });
+    }
+}
+
+/**
+ * Select primary language
+ */
+function selectPrimaryLanguage(code, name) {
+    primaryLang = code;
+    primaryInput.value = code;
+    primaryBtn.querySelector('span').textContent = name;
+    
+    // Update selection visual
+    primaryContent.querySelectorAll('.dropdown-item').forEach(item => {
+        item.classList.toggle('selected', item.dataset.value === code);
     });
+
+    // Update secondary dropdown (disable same language)
+    updateSecondaryOptions();
+    
+    // Enable install button
+    updateInstallButtonState();
+    
+    closeAllDropdowns();
+}
+
+/**
+ * Select secondary language
+ */
+function selectSecondaryLanguage(code, name) {
+    secondaryLang = code;
+    secondaryInput.value = code;
+    secondaryBtn.querySelector('span').textContent = name;
+    
+    // Update selection visual
+    secondaryContent.querySelectorAll('.dropdown-item').forEach(item => {
+        item.classList.toggle('selected', item.dataset.value === code);
+    });
+    
+    closeAllDropdowns();
+}
+
+/**
+ * Update secondary dropdown to disable primary language
+ */
+function updateSecondaryOptions() {
+    secondaryContent.querySelectorAll('.dropdown-item').forEach(item => {
+        const isPrimary = item.dataset.value === primaryLang;
+        item.classList.toggle('disabled', isPrimary);
+        
+        // If currently selected, reset to 'none'
+        if (isPrimary && secondaryLang === primaryLang) {
+            selectSecondaryLanguage('none', 'None');
+        }
+    });
+}
+
+/**
+ * Update install button state
+ */
+function updateInstallButtonState() {
+    const isEnabled = primaryLang !== '';
+    installBtn.disabled = !isEnabled;
+    installDropdownToggle.disabled = !isEnabled;
+}
+
+/**
+ * Generate manifest URL
+ */
+function getManifestUrl() {
+    const config = {
+        primaryLang: primaryLang,
+        secondaryLang: secondaryLang
+    };
+    
+    const configString = encodeURIComponent(JSON.stringify(config));
+    const host = window.location.host;
+    const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
+    
+    return `${protocol}://${host}/${configString}/manifest.json`;
+}
+
+/**
+ * Get stremio:// URL
+ */
+function getStremioUrl() {
+    const config = {
+        primaryLang: primaryLang,
+        secondaryLang: secondaryLang
+    };
+    
+    const configString = encodeURIComponent(JSON.stringify(config));
+    const host = window.location.host;
+    
+    return `stremio://${host}/${configString}/manifest.json`;
+}
+
+/**
+ * Install addon in Stremio
+ */
+function installAddon() {
+    if (!primaryLang) {
+        showToast('Please select a primary language first', 'error');
+        return;
+    }
+    
+    closeAllDropdowns();
+    window.location.href = getStremioUrl();
+}
+
+/**
+ * Copy manifest URL to clipboard
+ */
+async function copyManifestUrl() {
+    if (!primaryLang) {
+        showToast('Please select a primary language first', 'error');
+        return;
+    }
+    
+    const url = getManifestUrl();
+    
+    try {
+        await navigator.clipboard.writeText(url);
+        showToast('URL copied to clipboard!');
+    } catch (error) {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = url;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        showToast('URL copied to clipboard!');
+    }
+    
+    closeAllDropdowns();
+}
+
+/**
+ * Show toast notification
+ */
+function showToast(message, type = 'success') {
+    toast.textContent = message;
+    toast.style.background = type === 'error' ? 'var(--color-error)' : 'var(--color-success)';
+    toast.classList.add('show');
+    
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 3000);
 }

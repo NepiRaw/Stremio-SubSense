@@ -52,6 +52,12 @@ app.get('/stats/json', (req, res) => {
     res.json(statsService.getStats());
 });
 
+// Version API endpoint (for dynamic version display in UI)
+app.get('/api/version', (req, res) => {
+    const packageJson = require('./package.json');
+    res.json({ version: packageJson.version });
+});
+
 /**
  * Custom manifest route with dynamic description based on config
  * This must be BEFORE the SDK router to intercept manifest requests

@@ -9,21 +9,41 @@ let refreshInterval = null;
 
 const REFRESH_INTERVAL_MS = 30000; // 30 seconds
 
-// Chart colors
+// Chart colors - Modern Blue Theme
 const CHART_COLORS = [
-    '#7b2cbf', '#9d4edd', '#c77dff', '#e0aaff',
-    '#3498db', '#2ecc71', '#f39c12', '#e74c3c',
-    '#9b59b6', '#1abc9c', '#34495e', '#95a5a6'
+    '#4A90E2', '#6BA5E7', '#3578C0', '#89C4F4',
+    '#2ECC71', '#3498DB', '#9B59B6', '#E74C3C',
+    '#F39C12', '#1ABC9C', '#34495E', '#95A5A6'
 ];
 
 /**
  * Initialize the dashboard
  */
 document.addEventListener('DOMContentLoaded', () => {
+    fetchVersion();
     initCharts();
     loadStats();
     setupAutoRefresh();
 });
+
+/**
+ * Fetch version from API
+ */
+async function fetchVersion() {
+    try {
+        const response = await fetch('/api/version');
+        const data = await response.json();
+        const version = `v${data.version}`;
+        
+        const versionBadge = document.getElementById('versionBadge');
+        const footerVersion = document.getElementById('footerVersion');
+        
+        if (versionBadge) versionBadge.textContent = version;
+        if (footerVersion) footerVersion.textContent = version;
+    } catch (error) {
+        console.error('Failed to fetch version:', error);
+    }
+}
 
 /**
  * Initialize empty charts
@@ -45,7 +65,7 @@ function initCharts() {
             plugins: {
                 legend: {
                     position: 'right',
-                    labels: { color: '#eee' }
+                    labels: { color: '#E8EDF5' }
                 }
             }
         }
@@ -67,7 +87,7 @@ function initCharts() {
             plugins: {
                 legend: {
                     position: 'right',
-                    labels: { color: '#eee' }
+                    labels: { color: '#E8EDF5' }
                 }
             }
         }
@@ -82,8 +102,8 @@ function initCharts() {
             datasets: [{
                 label: 'Fetch Time (ms)',
                 data: [],
-                borderColor: '#7b2cbf',
-                backgroundColor: 'rgba(123, 44, 191, 0.2)',
+                borderColor: '#4A90E2',
+                backgroundColor: 'rgba(74, 144, 226, 0.2)',
                 fill: true,
                 tension: 0.3
             }]
@@ -93,17 +113,17 @@ function initCharts() {
             scales: {
                 y: {
                     beginAtZero: true,
-                    ticks: { color: '#aaa' },
-                    grid: { color: '#333' }
+                    ticks: { color: '#9CA8C8' },
+                    grid: { color: 'rgba(74, 144, 226, 0.2)' }
                 },
                 x: {
-                    ticks: { color: '#aaa' },
-                    grid: { color: '#333' }
+                    ticks: { color: '#9CA8C8' },
+                    grid: { color: 'rgba(74, 144, 226, 0.2)' }
                 }
             },
             plugins: {
                 legend: {
-                    labels: { color: '#eee' }
+                    labels: { color: '#E8EDF5' }
                 }
             }
         }
