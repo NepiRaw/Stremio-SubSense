@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS stats_daily (
     cache_hits INTEGER DEFAULT 0,
     cache_misses INTEGER DEFAULT 0,
     conversions INTEGER DEFAULT 0,
+    movies INTEGER DEFAULT 0,
+    series INTEGER DEFAULT 0,
     PRIMARY KEY (date)
 );
 

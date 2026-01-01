@@ -1,6 +1,6 @@
 const { providerManager, WyzieProvider } = require('./providers');
 const { parseStremioId, log } = require('./utils');
-const { mapStremioToWyzie, mapWyzieToStremio } = require('./languages');
+const { mapStremioToWyzie, mapWyzieToStremio, normalizeLanguageCode } = require('./languages');
 const statsService = require('./stats');
 
 const MAX_SUBTITLES = parseInt(process.env.MAX_SUBTITLES, 10) || 30;
@@ -145,13 +145,17 @@ async function handleSubtitles(args, config) {
                 responseTimeMs: fetchTimeMs
             });
             
-            statsDB.recordDaily({ requests: 1 });
+            statsDB.recordDaily({
+                requests: 1,
+                movies: parsed.type === 'movie' ? 1 : 0,
+                series: parsed.type === 'series' ? 1 : 0
+            });
             
-            // Record language stats for each selected language
+            // Record language stats for each selected language (normalized to B-variant)
             for (const lang of languages) {
                 const found = languageMatch?.byLanguage?.[lang]?.found || false;
                 statsDB.recordLanguageStats({
-                    languageCode: lang,
+                    languageCode: normalizeLanguageCode(lang),
                     found: found
                 });
             }
@@ -315,36 +319,20 @@ function prioritizeSubtitlesMulti(subtitles, languages) {
         }
     }
 
-    // Interleave subtitles from all languages for balanced distribution
-    // This ensures each language gets fair representation in the limited result set
-    const interleaved = [];
-    const indices = languages.reduce((acc, lang) => ({ ...acc, [lang]: 0 }), {});
+    // Return up to MAX_SUBTITLES per language
+    const results = [];
     
-    // Round-robin through languages
-    let hasMore = true;
-    while (hasMore && interleaved.length < MAX_SUBTITLES) {
-        hasMore = false;
-        for (const lang of languages) {
-            const langSubs = byLanguage[lang];
-            const idx = indices[lang];
-            if (idx < langSubs.length && interleaved.length < MAX_SUBTITLES) {
-                interleaved.push(langSubs[idx]);
-                indices[lang]++;
-                hasMore = true;
-            }
-        }
+    for (const lang of languages) {
+        const langSubs = byLanguage[lang];
+        // Take up to MAX_SUBTITLES for this language
+        const limited = langSubs.slice(0, MAX_SUBTITLES);
+        results.push(...limited);
     }
 
-    // Fill remaining slots with others if space allows
-    for (const sub of others) {
-        if (interleaved.length >= MAX_SUBTITLES) break;
-        interleaved.push(sub);
-    }
-
-    log('debug', `Interleaved ${interleaved.length} subtitles from ${languages.length} languages`);
+    log('debug', `Returning ${results.length} subtitles from ${languages.length} languages (up to ${MAX_SUBTITLES} per language)`);
 
     return {
-        subtitles: interleaved,
+        subtitles: results,
         languageMatch
     };
 }

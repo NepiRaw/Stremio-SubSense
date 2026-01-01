@@ -270,6 +270,8 @@ function getStats() {
         dailyStats.forEach(d => {
             byDate[d.date] = {
                 total: d.requests,
+                movie: d.movies || 0,
+                series: d.series || 0,
                 cacheHits: d.cache_hits,
                 cacheMisses: d.cache_misses
             };

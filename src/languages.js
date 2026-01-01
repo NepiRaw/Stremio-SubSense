@@ -112,10 +112,33 @@ function mapStremioToWyzie(stremioCode) {
     return alpha2 || code;
 }
 
+/**
+ * Normalize ISO 639-2 language codes to bibliographic (B) variant
+ * This ensures fra/fre, deu/ger, zho/chi etc. are consistent
+ * @param {string} code - ISO 639-2 language code (B or T variant)
+ * @returns {string} Normalized B-variant code (lowercase)
+ */
+function normalizeLanguageCode(code) {
+    if (!code || code === 'none') return code;
+    
+    const lowerCode = code.toLowerCase();
+    
+    // First convert to 2-letter, then back to 3-letter B variant
+    // This normalizes both T and B variants to B
+    const alpha2 = languages.alpha3TToAlpha2(lowerCode) || languages.alpha3BToAlpha2(lowerCode);
+    if (alpha2) {
+        const normalized = languages.alpha2ToAlpha3B(alpha2);
+        return normalized || lowerCode;
+    }
+    
+    return lowerCode;
+}
+
 module.exports = {
     getSupportedLanguages,
     getLanguageName,
     isValidLanguage,
     mapWyzieToStremio,
-    mapStremioToWyzie
+    mapStremioToWyzie,
+    normalizeLanguageCode
 };

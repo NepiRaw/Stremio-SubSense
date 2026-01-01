@@ -74,19 +74,21 @@ class StatsDB {
     
     /**
      * Record daily stats
-     * @param {Object} data - { requests, cacheHits, cacheMisses, conversions }
+     * @param {Object} data - { requests, cacheHits, cacheMisses, conversions, movies, series }
      */
     recordDaily(data) {
         const today = getLocalDateString();
         try {
             const stmt = db.prepare(`
-                INSERT INTO stats_daily (date, requests, cache_hits, cache_misses, conversions)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO stats_daily (date, requests, cache_hits, cache_misses, conversions, movies, series)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(date) DO UPDATE SET
                     requests = requests + ?,
                     cache_hits = cache_hits + ?,
                     cache_misses = cache_misses + ?,
-                    conversions = conversions + ?
+                    conversions = conversions + ?,
+                    movies = movies + ?,
+                    series = series + ?
             `);
             stmt.run(
                 today,
@@ -94,10 +96,14 @@ class StatsDB {
                 data.cacheHits || 0,
                 data.cacheMisses || 0,
                 data.conversions || 0,
+                data.movies || 0,
+                data.series || 0,
                 data.requests || 0,
                 data.cacheHits || 0,
                 data.cacheMisses || 0,
-                data.conversions || 0
+                data.conversions || 0,
+                data.movies || 0,
+                data.series || 0
             );
         } catch (error) {
             console.error('[StatsDB] RecordDaily error:', error.message);

@@ -37,7 +37,7 @@ function generateManifest(config = {}) {
     log('debug', `Generating manifest with description: "${description}"`);
 
     return {
-        id: 'community.subsense.nepiraw',
+        id: 'com.subsense.addon',
         version: packageJson.version,
         name: 'SubSense',
         description: description,
