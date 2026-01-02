@@ -375,10 +375,10 @@ async function loadStats() {
         updateErrorsTable(stats);
         updateLastUpdated();
         
-        // Load cache stats (Phase 2.5)
+        // Load cache stats
         loadCacheStats();
         
-        // Load provider stats (Phase 2.5)
+        // Load provider stats
         loadProviderStats();
         
         // Initialize truncated cell expand functionality
@@ -670,7 +670,7 @@ function escapeHtml(text) {
 }
 
 // =====================================================
-// Cache Stats (Phase 2.5)
+// Cache Stats
 // =====================================================
 
 /**
@@ -712,7 +712,7 @@ async function loadCacheStats() {
 }
 
 // =====================================================
-// Provider Stats (Phase 2.5)
+// Provider Stats
 // =====================================================
 
 /**

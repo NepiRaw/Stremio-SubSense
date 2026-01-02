@@ -520,32 +520,47 @@ function updateInstallButtonState() {
 }
 
 /**
- * Generate manifest URL
+ * Generate a random 8-character alphanumeric UserID
+ * @returns {string} 8-character alphanumeric string
+ */
+function generateUserId() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let userId = '';
+    for (let i = 0; i < 8; i++) {
+        userId += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return userId;
+}
+
+/**
+ * Generate manifest URL with UserID
  */
 function getManifestUrl() {
     const config = {
         languages: selectedLanguages
     };
     
+    const userId = generateUserId();
     const configString = encodeURIComponent(JSON.stringify(config));
     const host = window.location.host;
     const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
     
-    return `${protocol}://${host}/${configString}/manifest.json`;
+    return `${protocol}://${host}/${userId}-${configString}/manifest.json`;
 }
 
 /**
- * Get stremio:// URL
+ * Get stremio:// URL with UserID
  */
 function getStremioUrl() {
     const config = {
         languages: selectedLanguages
     };
     
+    const userId = generateUserId();
     const configString = encodeURIComponent(JSON.stringify(config));
     const host = window.location.host;
     
-    return `stremio://${host}/${configString}/manifest.json`;
+    return `stremio://${host}/${userId}-${configString}/manifest.json`;
 }
 
 /**

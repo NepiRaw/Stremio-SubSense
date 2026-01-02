@@ -12,7 +12,7 @@ const { convertToSrt, isAssFormat } = require('./src/services/subtitle-converter
 const app = express();
 const PORT = process.env.PORT || 3100;
 
-// Start cache cleaner (Phase 2)
+// Start cache cleaner
 if (process.env.ENABLE_CACHE !== 'false') {
     try {
         const { startCleaner } = require('./src/cache');
@@ -59,7 +59,7 @@ app.get('/api/version', (req, res) => {
 });
 
 // =====================================================
-// Stats API Endpoints (Phase 2.5)
+// Stats API Endpoints
 // =====================================================
 
 // Load cache modules for stats endpoints
@@ -146,7 +146,7 @@ app.get('/api/stats/daily', (req, res) => {
 });
 
 // =====================================================
-// Content Cache Browser Endpoints (Phase 2.5)
+// Content Cache Browser Endpoints
 // =====================================================
 
 /**
@@ -215,6 +215,10 @@ app.get('/stats/content', (req, res) => {
 /**
  * Custom manifest route with dynamic description based on config
  * This must be BEFORE the SDK router to intercept manifest requests
+ * 
+ * URL formats supported:
+ * - /{config}/manifest.json
+ * - /{userId}-{config}/manifest.json
  */
 app.get('/:config/manifest.json', (req, res) => {
     const { config: configParam } = req.params;
@@ -222,12 +226,29 @@ app.get('/:config/manifest.json', (req, res) => {
     
     log('info', `Manifest requested: ${fullUrl}`);
     
+    // Extract UserID if present (format: userId-config)
+    let userId = null;
+    let configString = configParam;
+    
+    // Check if first 8 chars are alphanumeric followed by hyphen
+    const userIdMatch = configParam.match(/^([a-z0-9]{8})-(.+)$/i);
+    if (userIdMatch) {
+        userId = userIdMatch[1].toLowerCase();
+        configString = userIdMatch[2];
+        log('debug', `UserID extracted: ${userId}`);
+    }
+    
     let config = {};
     try {
-        config = JSON.parse(decodeURIComponent(configParam));
+        config = JSON.parse(decodeURIComponent(configString));
         log('debug', `Parsed config: ${JSON.stringify(config)}`);
     } catch (e) {
-        log('warn', `Failed to parse config from URL: ${configParam}`);
+        log('warn', `Failed to parse config from URL: ${configString}`);
+    }
+    
+    // Store userId in config for later use in subtitle handler
+    if (userId) {
+        config.userId = userId;
     }
     
     // Generate manifest with dynamic description
@@ -313,7 +334,10 @@ const { parseConfig } = require('./src/config');
 /**
  * Custom subtitles route to handle JSON config format
  * Stremio SDK doesn't parse JSON configs, so we handle it ourselves
- * URL format: /{config}/subtitles/{type}/{id}.json
+ * 
+ * URL formats:
+ * - /{config}/subtitles/{type}/{id}.json (legacy - no UserID)
+ * - /{userId}-{config}/subtitles/{type}/{id}.json (new - with 8-char UserID)
  */
 app.get('/:config/subtitles/:type/:id.json', async (req, res) => {
     const { config: configParam, type, id } = req.params;
@@ -321,17 +345,38 @@ app.get('/:config/subtitles/:type/:id.json', async (req, res) => {
     log('debug', `Subtitle request: config=${configParam}, type=${type}, id=${id}`);
     
     try {
+        // Extract UserID if present (format: userId-config)
+        let userId = null;
+        let configString = configParam;
+        
+        const userIdMatch = configParam.match(/^([a-z0-9]{8})-(.+)$/i);
+        if (userIdMatch) {
+            userId = userIdMatch[1].toLowerCase();
+            configString = userIdMatch[2];
+            log('debug', `UserID extracted: ${userId}`);
+        }
+        
         // Parse JSON config from URL
         let config = {};
         try {
-            config = JSON.parse(decodeURIComponent(configParam));
+            config = JSON.parse(decodeURIComponent(configString));
         } catch (e) {
-            log('warn', `Failed to parse config: ${configParam}`);
+            log('warn', `Failed to parse config: ${configString}`);
             return res.status(400).json({ subtitles: [], error: 'Invalid config format' });
+        }
+        
+        // Store userId in config for tracking
+        if (userId) {
+            config.userId = userId;
         }
         
         // Validate config
         const validatedConfig = parseConfig(config);
+        
+        // Preserve userId after validation
+        if (userId) {
+            validatedConfig.userId = userId;
+        }
         
         // Build args object like Stremio SDK does
         const args = {

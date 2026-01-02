@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS request_log (
 CREATE INDEX IF NOT EXISTS idx_request_log_created 
 ON request_log(created_at);
 
--- Provider performance tracking (NEW - Phase 2.5)
+-- Provider performance tracking
 CREATE TABLE IF NOT EXISTS provider_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider_name TEXT NOT NULL,
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS provider_stats (
 CREATE INDEX IF NOT EXISTS idx_provider_stats_date 
 ON provider_stats(date);
 
--- Language analytics (NEW - Phase 2.5)
+-- Language analytics table
 -- Updated: Added priority column to distinguish primary vs secondary language requests
 CREATE TABLE IF NOT EXISTS language_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +119,41 @@ ON language_stats(date);
 CREATE INDEX IF NOT EXISTS idx_language_stats_priority 
 ON language_stats(priority);
 
--- Content cache summary view (NEW - Phase 2.5)
+-- Session analytics table
+-- Stores anonymized per-session statistics for usage analytics
+CREATE TABLE IF NOT EXISTS user_tracking (
+    user_id TEXT PRIMARY KEY,
+    languages TEXT NOT NULL, -- JSON array of language codes
+    total_requests INTEGER DEFAULT 0,
+    movie_requests INTEGER DEFAULT 0,
+    series_requests INTEGER DEFAULT 0,
+    first_seen INTEGER DEFAULT (strftime('%s', 'now')),
+    last_active INTEGER DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_tracking_last_active 
+ON user_tracking(last_active);
+
+-- Session content log
+-- Records content requests per session for analytics
+CREATE TABLE IF NOT EXISTS user_content_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    imdb_id TEXT NOT NULL,
+    content_type TEXT,
+    season INTEGER,
+    episode INTEGER,
+    requested_at INTEGER DEFAULT (strftime('%s', 'now')),
+    FOREIGN KEY (user_id) REFERENCES user_tracking(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_content_log_user 
+ON user_content_log(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_user_content_log_imdb 
+ON user_content_log(imdb_id);
+
+-- Content cache summary view
 -- For browsing cached content by IMDB ID
 CREATE VIEW IF NOT EXISTS content_cache_summary AS
 SELECT 

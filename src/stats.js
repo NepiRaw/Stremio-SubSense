@@ -1,6 +1,5 @@
 /**
- * Statistics tracking service (Hybrid: in-memory + persistent DB)
- * Phase 2.5 - Stats are now persisted to database and survive restarts
+ * Statistics tracking service
  */
 
 // Database stats module (lazy-loaded)
@@ -136,7 +135,7 @@ function trackRequest({ type, fetchTimeMs, subtitleCount, subtitles = [], langua
         }
     }
     
-    // Persist key counters to database (Phase 2.5)
+    // Persist key counters to database
     const db = getStatsDB();
     if (db) {
         db.increment('total_requests');
@@ -175,7 +174,7 @@ function getStats() {
         ? Math.round(stats.timing.totalMs / stats.timing.count) 
         : 0;
 
-    // Get persistent counters from database (Phase 2.5)
+    // Get persistent counters from database
     let persistentStats = {};
     let dailyStats = [];
     let languageMatchSummary = null;

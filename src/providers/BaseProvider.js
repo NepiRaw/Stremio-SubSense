@@ -99,7 +99,7 @@ class BaseProvider {
             this.stats.lastError = error ? error.message : 'Unknown error';
         }
         
-        // Also record to database (Phase 2.5)
+        // Also record to database
         this._recordToDatabase(success, fetchTimeMs, subtitleCount);
     }
     

@@ -5,7 +5,7 @@ const statsService = require('./stats');
 
 const MAX_SUBTITLES = parseInt(process.env.MAX_SUBTITLES, 10) || 30;
 
-// Cache modules (Phase 2)
+// Cache modules
 const ENABLE_CACHE = process.env.ENABLE_CACHE !== 'false';
 let subtitleCache = null;
 let statsDB = null;
@@ -134,7 +134,7 @@ async function handleSubtitles(args, config) {
             providerStats: providerManager.getStats()
         });
 
-        // Log detailed request to database (Phase 2.5)
+        // Log detailed request to database
         if (statsDB) {
             statsDB.logRequest({
                 imdbId: parsed.imdbId,
@@ -159,6 +159,17 @@ async function handleSubtitles(args, config) {
                     found: found
                 });
             }
+        }
+
+        // Record session analytics
+        if (statsDB && config.userId) {
+            statsDB.trackUserRequest(config.userId, {
+                imdbId: parsed.imdbId,
+                contentType: parsed.type,
+                languages: languages,
+                season: parsed.season,
+                episode: parsed.episode
+            });
         }
 
         log('debug', `Returning ${formatted.length} subtitles in ${fetchTimeMs}ms`);
@@ -390,11 +401,11 @@ function formatForStremio(subtitles) {
         }
 
         return {
-            id: `subsense-${index}-${sub.id || Date.now()}`,
+            id: `subsense-${index}-${sub.id || Date.now()}-${source}`,
             url: url,
             lang: lang,
             label: label,
-            source: source // Include for stats tracking
+            source: source
         };
     }).filter(sub => {
         const valid = !!sub.url;

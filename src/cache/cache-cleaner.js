@@ -1,12 +1,14 @@
 /**
  * Background Cache Cleaner
- * Cleans up old request logs and stale subtitle cache entries
+ * Cleans up old request logs, stale subtitle cache entries, and inactive sessions
  */
 const db = require('./database');
+const { log } = require('../utils');
 
 const CLEANUP_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 const LOG_RETENTION_DAYS = 30;
 const CACHE_RETENTION_DAYS = parseInt(process.env.CACHE_RETENTION_DAYS, 10) || 90; // 3 months default
+const SESSION_RETENTION_DAYS = 60; // Remove sessions inactive for 60 days
 
 /**
  * Clean old request logs (keeps last 30 days)
@@ -19,10 +21,10 @@ function cleanOldRequestLogs() {
         `);
         const result = stmt.run(LOG_RETENTION_DAYS);
         if (result.changes > 0) {
-            console.log(`[Cache] Cleanup: removed ${result.changes} old request logs`);
+            log('info', `Cleanup: removed ${result.changes} old request logs`);
         }
     } catch (error) {
-        console.error('[Cache] Cleanup error (logs):', error.message);
+        log('error', `Cleanup error (logs): ${error.message}`);
     }
 }
 
@@ -37,10 +39,40 @@ function cleanOldCacheEntries() {
         `);
         const result = stmt.run(CACHE_RETENTION_DAYS);
         if (result.changes > 0) {
-            console.log(`[Cache] Cleanup: removed ${result.changes} old cache entries (>${CACHE_RETENTION_DAYS} days)`);
+            log('info', `Cleanup: removed ${result.changes} old cache entries (>${CACHE_RETENTION_DAYS} days)`);
         }
     } catch (error) {
-        console.error('[Cache] Cleanup error (cache):', error.message);
+        log('error', `Cleanup error (cache): ${error.message}`);
+    }
+}
+
+/**
+ * Clean inactive sessions (no requests in 60 days)
+ */
+function cleanInactiveSessions() {
+    try {
+        // First, clean up content logs for sessions that will be deleted
+        const contentLogStmt = db.prepare(`
+            DELETE FROM user_content_log 
+            WHERE user_id IN (
+                SELECT user_id FROM user_tracking 
+                WHERE last_active < strftime('%s', 'now', '-' || ? || ' days')
+            )
+        `);
+        const contentResult = contentLogStmt.run(SESSION_RETENTION_DAYS);
+        
+        // Then delete the inactive sessions
+        const sessionStmt = db.prepare(`
+            DELETE FROM user_tracking 
+            WHERE last_active < strftime('%s', 'now', '-' || ? || ' days')
+        `);
+        const sessionResult = sessionStmt.run(SESSION_RETENTION_DAYS);
+        
+        if (sessionResult.changes > 0) {
+            log('info', `Cleanup: removed ${sessionResult.changes} inactive sessions (>${SESSION_RETENTION_DAYS} days, ${contentResult.changes} content logs)`);
+        }
+    } catch (error) {
+        log('error', `Cleanup error (sessions): ${error.message}`);
     }
 }
 
@@ -78,15 +110,16 @@ function getCacheStats() {
 function runCleanup() {
     cleanOldRequestLogs();
     cleanOldCacheEntries();
+    cleanInactiveSessions();
 }
 
 /**
  * Start the background cleaner
  */
 function startCleaner() {
-    console.log(`[Cache] Starting background cleaner (cache retention: ${CACHE_RETENTION_DAYS} days)`);
+    log('info', `Starting background cleaner (cache: ${CACHE_RETENTION_DAYS} days, sessions: ${SESSION_RETENTION_DAYS} days)`);
     runCleanup(); // Initial cleanup
     setInterval(runCleanup, CLEANUP_INTERVAL);
 }
 
-module.exports = { startCleaner, cleanOldRequestLogs, cleanOldCacheEntries, getCacheStats };
+module.exports = { startCleaner, cleanOldRequestLogs, cleanOldCacheEntries, cleanInactiveSessions, getCacheStats };

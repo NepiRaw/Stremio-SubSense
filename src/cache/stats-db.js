@@ -1,8 +1,8 @@
 /**
  * Persistent Statistics - SQLite-backed stats storage
- * Replaces in-memory stats for persistence across restarts
  */
 const db = require('./database');
+const { log } = require('../utils');
 
 /**
  * Get local date string in YYYY-MM-DD format
@@ -15,6 +15,38 @@ function getLocalDateString() {
     const day = String(now.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
 }
+
+// Prepared statements for session analytics
+const insertUserStmt = db.prepare(`
+    INSERT INTO user_tracking (user_id, languages, total_requests, movie_requests, series_requests, first_seen, last_active)
+    VALUES (?, ?, 1, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+    ON CONFLICT(user_id) DO UPDATE SET
+        total_requests = total_requests + 1,
+        movie_requests = movie_requests + excluded.movie_requests,
+        series_requests = series_requests + excluded.series_requests,
+        last_active = strftime('%s', 'now')
+`);
+
+const insertContentLogStmt = db.prepare(`
+    INSERT INTO user_content_log (user_id, imdb_id, content_type, season, episode, requested_at)
+    VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))
+`);
+
+const getUserStatsStmt = db.prepare(`
+    SELECT * FROM user_tracking WHERE user_id = ?
+`);
+
+const getUserContentStmt = db.prepare(`
+    SELECT * FROM user_content_log 
+    WHERE user_id = ? 
+    ORDER BY requested_at DESC 
+    LIMIT ?
+`);
+
+const getActiveUsersCountStmt = db.prepare(`
+    SELECT COUNT(*) as count FROM user_tracking 
+    WHERE last_active > strftime('%s', 'now') - ?
+`);
 
 class StatsDB {
     /**
@@ -188,7 +220,7 @@ class StatsDB {
     }
     
     // =====================================================
-    // Provider Stats Methods (Phase 2.5)
+    // Provider Stats Methods
     // =====================================================
     
     /**
@@ -268,7 +300,7 @@ class StatsDB {
     }
     
     // =====================================================
-    // Language Stats Methods (Phase 2.5)
+    // Language Stats Methods
     // =====================================================
     
     /**
@@ -411,7 +443,7 @@ class StatsDB {
     }
     
     // =====================================================
-    // Cache Analytics Methods (Phase 2.5)
+    // Cache Analytics Methods
     // =====================================================
     
     /**
@@ -560,8 +592,147 @@ class StatsDB {
                 lastUpdated: Math.max(...results.map(r => r.last_updated))
             };
         } catch (error) {
-            console.error('[StatsDB] SearchCacheByImdb error:', error.message);
+            log('error', `[StatsDB] SearchCacheByImdb error: ${error.message}`);
             return null;
+        }
+    }
+    
+    // ========================================
+    // Session Analytics Methods
+    // ========================================
+    
+    /**
+     * Record session request for analytics
+     * @param {string} userId - 8-char session identifier
+     * @param {Object} requestData - Request details
+     */
+    trackUserRequest(userId, requestData) {
+        if (!userId) {
+            return; // No session ID means no analytics (legacy manifest)
+        }
+        
+        const { imdbId, contentType, languages, season, episode } = requestData;
+        
+        try {
+            const isMovie = contentType === 'movie' ? 1 : 0;
+            const isSeries = contentType === 'series' ? 1 : 0;
+            const languagesJson = JSON.stringify(languages || []);
+            
+            // Update or insert session stats
+            insertUserStmt.run(userId, languagesJson, isMovie, isSeries);
+            
+            // Log the content request
+            insertContentLogStmt.run(userId, imdbId, contentType, season || null, episode || null);
+            
+            log('debug', `Session ${userId}: ${contentType} ${imdbId}`);
+        } catch (error) {
+            log('error', `Failed to record session ${userId}: ${error.message}`);
+        }
+    }
+    
+    /**
+     * Get stats for a specific session
+     * @param {string} userId - 8-char session identifier
+     * @returns {Object|null} Session stats or null if not found
+     */
+    getUserStats(userId) {
+        try {
+            const user = getUserStatsStmt.get(userId);
+            if (!user) return null;
+            
+            return {
+                sessionId: user.user_id,
+                languages: JSON.parse(user.languages || '[]'),
+                totalRequests: user.total_requests,
+                movieRequests: user.movie_requests,
+                seriesRequests: user.series_requests,
+                firstSeen: new Date(user.first_seen * 1000),
+                lastActive: new Date(user.last_active * 1000)
+            };
+        } catch (error) {
+            log('error', `Failed to get session stats for ${userId}: ${error.message}`);
+            return null;
+        }
+    }
+    
+    /**
+     * Get recent content requested by a session
+     * @param {string} userId - 8-char session identifier
+     * @param {number} [limit=10] - Max number of items to return
+     * @returns {Array} Array of content requests
+     */
+    getUserContent(userId, limit = 10) {
+        try {
+            const rows = getUserContentStmt.all(userId, limit);
+            return rows.map(row => ({
+                imdbId: row.imdb_id,
+                contentType: row.content_type,
+                season: row.season,
+                episode: row.episode,
+                requestedAt: new Date(row.requested_at * 1000)
+            }));
+        } catch (error) {
+            log('error', `Failed to get session content for ${userId}: ${error.message}`);
+            return [];
+        }
+    }
+    
+    /**
+     * Get count of active sessions in the last N days
+     * @param {number} [days=30] - Number of days to consider
+     * @returns {number} Count of active sessions
+     */
+    getActiveUsersCount(days = 30) {
+        try {
+            const seconds = days * 24 * 60 * 60;
+            const result = getActiveUsersCountStmt.get(seconds);
+            return result?.count || 0;
+        } catch (error) {
+            log('error', `Failed to get active sessions count: ${error.message}`);
+            return 0;
+        }
+    }
+    
+    /**
+     * Get aggregate session statistics
+     * @returns {Object} Aggregate stats
+     */
+    getAggregateUserStats() {
+        try {
+            const stats = db.prepare(`
+                SELECT 
+                    COUNT(*) as total_users,
+                    SUM(total_requests) as total_requests,
+                    SUM(movie_requests) as movie_requests,
+                    SUM(series_requests) as series_requests,
+                    AVG(total_requests) as avg_requests_per_user
+                FROM user_tracking
+            `).get();
+            
+            const activeSessions = {
+                last7Days: this.getActiveUsersCount(7),
+                last30Days: this.getActiveUsersCount(30),
+                last60Days: this.getActiveUsersCount(60)
+            };
+            
+            return {
+                totalSessions: stats?.total_users || 0,
+                totalRequests: stats?.total_requests || 0,
+                movieRequests: stats?.movie_requests || 0,
+                seriesRequests: stats?.series_requests || 0,
+                avgRequestsPerSession: Math.round(stats?.avg_requests_per_user || 0),
+                activeSessions
+            };
+        } catch (error) {
+            log('error', `Failed to get aggregate session stats: ${error.message}`);
+            return {
+                totalSessions: 0,
+                totalRequests: 0,
+                movieRequests: 0,
+                seriesRequests: 0,
+                avgRequestsPerSession: 0,
+                activeSessions: { last7Days: 0, last30Days: 0, last60Days: 0 }
+            };
         }
     }
 }
