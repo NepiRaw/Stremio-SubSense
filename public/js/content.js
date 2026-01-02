@@ -309,7 +309,7 @@ async function loadRecentContent() {
         const data = await response.json();
         
         if (data.items.length === 0 && currentPage === 1) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--color-text-secondary);">No cached content yet</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--color-text-secondary);">No cached content yet</td></tr>';
             pagination.style.display = 'none';
             return;
         }
@@ -321,24 +321,20 @@ async function loadRecentContent() {
                 ? '<span class="badge badge-series">Series</span>' 
                 : '<span class="badge badge-info">Movie</span>';
             
-            // Format episode info with unified modern badge
-            let episodeBadge = '';
+            // Format episode info - now in separate column
+            let episodeCell = '';
             if (isSeries) {
                 const season = String(item.season).padStart(2, '0');
                 const episode = String(item.episode).padStart(2, '0');
-                episodeBadge = `<span class="episode-badge">S${season}E${episode}</span>`;
+                episodeCell = `<span class="episode-badge">S${season}E${episode}</span>`;
             }
             
             const sources = item.sources || '-';
             
             return `
                 <tr>
-                    <td>
-                        <div class="imdb-cell">
-                            <code>${item.imdb_id.toUpperCase()}</code>
-                            ${episodeBadge}
-                        </div>
-                    </td>
+                    <td><code>${item.imdb_id.toUpperCase()}</code></td>
+                    <td>${episodeCell}</td>
                     <td>${typeBadge}</td>
                     <td>${item.languages_cached}</td>
                     <td>${item.total_subtitles}</td>
@@ -368,7 +364,7 @@ async function loadRecentContent() {
         
     } catch (error) {
         console.error('Failed to load recent content:', error);
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #e74c3c;">Failed to load content</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #e74c3c;">Failed to load content</td></tr>';
     }
 }
 

@@ -79,10 +79,22 @@ body::before {
 }
 
 .container {
-    max-width: 560px;
+    max-width: 700px;
     margin: 0 auto;
     position: relative;
     z-index: 1;
+}
+
+/* Glass-effect container for configure page */
+.container.glass {
+    background: rgba(12, 18, 38, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 20px;
+    padding: 40px;
+    border: 1px solid rgba(74, 144, 226, 0.2);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    animation: slideUp 0.6s ease-out;
 }
 
 .container.wide {
@@ -175,10 +187,10 @@ body::before {
 .tagline,
 .subtitle {
     color: var(--color-text-secondary);
-    font-size: 1rem;
-    max-width: 420px;
+    font-size: 1.1rem;
+    max-width: 480px;
     margin: 0 auto;
-    line-height: 1.5;
+    line-height: 1.6;
 }
 
 /* ===== Navigation ===== */
@@ -311,9 +323,47 @@ body::before {
 /* ===== Subtitle Sources Grid ===== */
 .sources-description {
     color: var(--color-text-secondary);
-    font-size: 0.95rem;
+    font-size: 1.05rem;
     margin-bottom: 20px;
     line-height: 1.5;
+}
+
+/* Wyzie Provider Section */
+.provider-section {
+    background: rgba(26, 34, 63, 0.6);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+    border: 1px solid rgba(74, 144, 226, 0.15);
+}
+
+.provider-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-accent-blue);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.provider-badge svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+}
+
+/* Additional Sources Section (conditional) */
+.additional-sources-section {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+}
+
+.additional-sources-section .provider-badge {
+    color: var(--color-text-secondary);
 }
 
 .sources-grid {
@@ -365,14 +415,43 @@ body::before {
 }
 
 .source-name {
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     font-weight: 500;
     color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* At small widths, hide logos and show text only */
+@media (max-width: 600px) {
+    .source-logo {
+        display: none;
+    }
+    
+    .source-item {
+        justify-content: center;
+        padding: 10px 12px;
+    }
+    
+    .source-name {
+        font-size: 0.8rem;
+    }
 }
 
 @media (max-width: 520px) {
     .sources-grid {
         grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 380px) {
+    .sources-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .source-item {
+        justify-content: flex-start;
     }
 }
 
@@ -383,7 +462,7 @@ body::before {
 
 label {
     display: block;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
     color: var(--color-text-primary);
     margin-bottom: 10px;
@@ -392,7 +471,7 @@ label {
 .label-hint {
     font-weight: 400;
     color: var(--color-text-secondary);
-    font-size: 0.85rem;
+    font-size: 0.9rem;
 }
 
 .hint-text {
@@ -1127,12 +1206,19 @@ label {
     cursor: pointer;
     transition: var(--transition); 
     display: flex; 
-    align-items: center; 
+    align-items: center;
+    justify-content: center;
     gap: 8px;
     white-space: nowrap; 
     box-shadow: 0 4px 15px rgba(74, 144, 226, 0.3);
     position: relative;
     overflow: hidden;
+}
+.search-btn svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    fill: currentColor;
 }
 .search-btn::before {
     content: "";

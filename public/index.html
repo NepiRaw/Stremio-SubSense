@@ -13,8 +13,7 @@
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
+    <div class="container glass">
         <header class="header">
             <div class="logo-container">
                 <img src="/logo.png" alt="SubSense" class="logo-img">
@@ -28,7 +27,6 @@
             </nav>
         </header>
 
-        <!-- Configuration Card -->
         <div class="card">
             <h2 class="card-title">
                 <svg viewBox="0 0 24 24">
@@ -37,21 +35,17 @@
                 Language Configuration
             </h2>
 
-            <!-- New Modern Multi-Select Input -->
             <div class="form-group">
                 <label for="languageInput">Select Languages <span class="label-hint">(up to 5)</span></label>
                 
                 <div class="multiselect-container" id="multiselectContainer">
                     <div class="multiselect-input-wrapper" id="inputWrapper">
-                        <!-- Selected tags will be inserted here -->
                         <input type="text" id="languageInput" placeholder="Search languages..." autocomplete="off">
                     </div>
                     
-                    <!-- Dropdown Options -->
                     <div class="multiselect-dropdown" id="dropdownList">
                         <div class="dropdown-status" id="dropdownStatus" style="display: none;"></div>
                         <div class="options-list" id="optionsList">
-                            <!-- Populated by JavaScript -->
                         </div>
                     </div>
                 </div>
@@ -59,7 +53,6 @@
                 <p class="hint-text">Type to search. Backspace to remove last language.</p>
             </div>
 
-            <!-- Install Button with Dropdown -->
             <div class="install-container">
                 <div class="install-button-wrapper">
                     <button type="button" class="install-btn" id="installBtn" disabled>
@@ -91,7 +84,6 @@
             </div>
         </div>
 
-        <!-- Subtitle Sources Card -->
         <div class="card">
             <h2 class="card-title">
                 <svg viewBox="0 0 24 24">
@@ -100,35 +92,50 @@
                 Subtitle Sources
             </h2>
             <p class="sources-description">This addon aggregates subtitles from multiple trusted sources:</p>
-            <div class="sources-grid">
-                <div class="source-item">
-                    <img src="https://www.opensubtitles.org/favicon.ico" alt="OpenSubtitles" class="source-logo">
-                    <span class="source-name">OpenSubtitles</span>
+            
+            <div class="provider-section" id="wyzieSection">
+                <div class="provider-badge">
+                    <svg viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    Powered by Wyzie
                 </div>
-                <div class="source-item">
-                    <img src="https://subdl.com/favicon.ico" alt="SubDL" class="source-logo">
-                    <span class="source-name">SubDL</span>
+                <div class="sources-grid">
+                    <div class="source-item">
+                        <img src="https://www.opensubtitles.org/favicon.ico" alt="OpenSubtitles" class="source-logo">
+                        <span class="source-name">OpenSubtitles</span>
+                    </div>
+                    <div class="source-item">
+                        <img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/subdl.png" alt="SubDL" class="source-logo">
+                        <span class="source-name">SubDL</span>
+                    </div>
+                    <div class="source-item">
+                        <img src="https://i.imgur.com/tBm629V.png" alt="Subf2m" class="source-logo">
+                        <span class="source-name">Subf2m</span>
+                    </div>
+                    <div class="source-item">
+                        <img src="https://www.podnapisi.net/static/favicon.ico" alt="Podnapisi" class="source-logo">
+                        <span class="source-name">Podnapisi</span>
+                    </div>
+                    <div class="source-item">
+                        <img src="https://i.ibb.co/QFmG3vKd/favicon.png" alt="Gestdown" class="source-logo">
+                        <span class="source-name">Gestdown</span>
+                    </div>
+                    <div class="source-item">
+                        <img src="https://animetosho.org/inc/favicon.ico" alt="AnimeTosho" class="source-logo">
+                        <span class="source-name">AnimeTosho</span>
+                    </div>
                 </div>
-                <div class="source-item">
-                    <img src="https://github.com/nRafinia/Emby.Subtitle.Subf2m/blob/main/src/Emby.Subtitle.Subf2m/thumb.png?raw=true" alt="Subf2m" class="source-logo">
-                    <span class="source-name">Subf2m</span>
+            </div>
+            
+            <div class="additional-sources-section" id="additionalSourcesSection" style="display: none;">
+                <div class="provider-badge">
+                    <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                    Additional Sources
                 </div>
-                <div class="source-item">
-                    <img src="https://www.podnapisi.net/static/favicon.ico" alt="Podnapisi" class="source-logo">
-                    <span class="source-name">Podnapisi</span>
-                </div>
-                <div class="source-item">
-                    <img src="https://i.ibb.co/QFmG3vKd/favicon.png" alt="Gestdown" class="source-logo">
-                    <span class="source-name">Gestdown</span>
-                </div>
-                <div class="source-item">
-                    <img src="https://animetosho.org/inc/favicon.ico" alt="AnimeTosho" class="source-logo">
-                    <span class="source-name">AnimeTosho</span>
+                <div class="sources-grid" id="additionalSourcesGrid">
                 </div>
             </div>
         </div>
 
-        <!-- Footer -->
         <footer class="footer">
             <a href="https://github.com/NepiRaw" target="_blank" class="github-link">
                 <svg viewBox="0 0 24 24">
@@ -139,7 +146,6 @@
         </footer>
     </div>
 
-    <!-- Toast notification -->
     <div class="toast" id="toast">URL copied to clipboard!</div>
 
     <script src="js/configure.js"></script>

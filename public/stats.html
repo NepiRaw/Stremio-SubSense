@@ -15,7 +15,6 @@
 </head>
 <body>
     <div class="container wide">
-        <!-- Header -->
         <header class="header">
             <div class="logo-container">
                 <img src="/logo.png" alt="SubSense" class="logo-img">
@@ -30,7 +29,6 @@
             </nav>
         </header>
 
-        <!-- Auto-refresh toggle -->
         <div class="toggle-container">
             <label class="toggle-switch">
                 <input type="checkbox" id="autoRefresh" checked>
@@ -40,7 +38,6 @@
             <span id="lastUpdated" style="margin-left: auto; color: var(--color-text-secondary); font-size: 0.9rem;"></span>
         </div>
 
-        <!-- Stats Overview -->
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="value" id="totalRequests">0</div>
@@ -68,7 +65,6 @@
             </div>
         </div>
 
-        <!-- Cache Performance (Phase 2.5) -->
         <div class="card">
             <h2>🗄️ Cache Performance</h2>
             <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr);">
@@ -103,7 +99,6 @@
             </div>
         </div>
 
-        <!-- Provider Health (Phase 2.5) -->
         <div class="card" id="providerCard">
             <h2>🔌 Provider Health</h2>
             <div class="table-responsive">
@@ -125,7 +120,6 @@
             </div>
         </div>
 
-        <!-- Language Matching Stats -->
         <div class="card">
             <h2>🎯 Language Matching</h2>
             <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
@@ -145,12 +139,10 @@
             <div style="margin-top: 20px;">
                 <h4>Top Successful Languages</h4>
                 <div id="topLanguages" style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px;">
-                    <!-- Populated by JS -->
                 </div>
             </div>
         </div>
 
-        <!-- Charts Row -->
         <div class="charts-row">
             <div class="chart-container">
                 <h3>Subtitles by Source</h3>
@@ -169,13 +161,11 @@
             </div>
         </div>
 
-        <!-- Fetch Time Chart -->
         <div class="chart-container">
             <h3>Recent Fetch Times (ms)</h3>
             <canvas id="timingChart"></canvas>
         </div>
 
-        <!-- Daily Activity -->
         <div class="card">
             <h2>📅 Recent Activity</h2>
             <div class="table-responsive">
@@ -189,13 +179,11 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <!-- Populated by JS -->
                     </tbody>
                 </table>
             </div>
         </div>
 
-        <!-- Errors -->
         <div class="card" id="errorsCard" style="display: none;">
             <h2>⚠️ Recent Errors</h2>
             <div class="table-responsive">
@@ -207,13 +195,11 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <!-- Populated by JS -->
                     </tbody>
                 </table>
             </div>
         </div>
 
-        <!-- Footer -->
         <footer class="footer">
             <p>SubSense <span id="footerVersion">...</span> | <a href="/stats/json" target="_blank">Raw JSON</a></p>
         </footer>
