@@ -12,66 +12,53 @@
 
 ---
 
-<p align="center"><b>Subtitle aggregator for Stremio that fetches subtitles from multiple sources and add the preferred language in your Stremio's stream.</b></p>
+<p align="center"><b>Subtitle aggregator for Stremio that fetches subtitles from multiple sources.</b></p>
 
 ---
 
 ## 🎯 Features
 
-- 🔍 **Multi-source aggregation**: Fetches subtitles from OpenSubtitles, SubDL, Podnapisi, and more
-- 🌍 **Multi-language support**: Primary and secondary language selection with priority handling
-- 🔄 **ASS/SSA to SRT conversion**: Automatic conversion for maximum player compatibility
-- ⚡ **Fast-first parallel strategy**: Returns results as soon as fastest provider responds
-- 📊 **Statistics dashboard**: Track usage, cache hits, and performance metrics
-- 🎨 **Easy configuration**: Simple web-based configuration interface
-- 🏷️ **Smart filtering**: Removes duplicates and prioritizes highest quality subtitles
+- 🔍 **Multi-source aggregation** — Fetches subtitles from OpenSubtitles, SubDL, Podnapisi, and more
+- 🌍 **Multi-language support** — Select up to 5 subtitle languages with equal priority
+- ⚡ **Fast-first strategy** — Returns results as soon as fastest provider responds
+- 🎨 **Easy configuration** — Simple web-based configuration interface
+- 🗄️ **Smart caching** — SQLite-based caching for faster subsequent requests
 
 ## 📋 Table of Contents
 
 - [⚡ Quick Start](#-quick-start)
 - [⚙️ Configuration](#️-configuration)
-- [🚀 Self-Hosting Installation](#-self-hosting-installation)
-  - [🐳 Docker Compose (Recommended)](#-docker-compose-recommended)
-  - [📦 Manual Installation](#-manual-installation)
+- [🚀 Self-Hosting](#-self-hosting)
 - [🔧 Environment Variables](#-environment-variables)
-- [❓ FAQs](#-faqs)
-- [📚 Documentation](#-documentation)
 
 ## ⚡ Quick Start
 
 1. Navigate to your addon URL (default: `http://localhost:3100`)
-2. Select your primary and optional secondary subtitle language
-3. Click "Install Addon" to add SubSense to Stremio
+2. Select your preferred subtitle languages (up to 5)
+3. Click **Install Addon** to add SubSense to Stremio
 4. Enjoy automatic subtitles for your movies and series!
 
 ## ⚙️ Configuration
 
 ### Access Configuration
 
-1. Open the addon URL in your browser
-2. Configure your preferred languages:
-   - **Primary Language**: Main subtitle language (required)
-   - **Secondary Language**: Fallback language (optional)
-3. Click "Install Addon" button
+Open `/configure` in your browser to access the configuration page.
 
-### Configuration Options
+### Options
 
 | Option | Description |
 |--------|-------------|
-| **Primary Language** | Your preferred subtitle language (e.g., English, French) |
-| **Secondary Language** | Optional fallback if primary not available |
+| **Languages** | Select up to 5 subtitle languages (English pre-selected by default) |
+| **Max Subtitles** | Limit subtitles per language (Unlimited, 3, 5, 10, 25, 50, 100) |
 
-### Recommendations
+### Tips
 
-- Set your native language as primary for best results
-- Add a secondary language (like English) as fallback for international content
-- Install SubSense high in your addon list for faster subtitle loading
+- Set your native language first for best results
+- Add English as a fallback for international content
 
-## 🚀 Self-Hosting Installation
+## 🚀 Self-Hosting
 
 ### 🐳 Docker Compose (Recommended)
-
-1. **Create a `docker-compose.yml` file:**
 
 ```yaml
 services:
@@ -84,70 +71,57 @@ services:
     environment:
       - PORT=3100
       - LOG_LEVEL=info
-      - MAX_SUBTITLES=10
+    volumes:
+      - ./data:/app/data  # Persist cache database
 ```
-
-2. **Start the container:**
 
 ```bash
 docker-compose up -d
 ```
 
-3. **Access your addon:**
-
-Open `http://localhost:3100` in your browser to configure the addon.
-
 ### 📦 Manual Installation
-
-1. **Clone the repository:**
 
 ```bash
 git clone https://github.com/NepiRaw/Stremio-SubSense.git
 cd Stremio-SubSense
-```
-
-2. **Install dependencies:**
-
-```bash
 npm install
-```
-
-3. **Configure environment (optional):**
-
-```bash
-cp .env.example .env
-# Edit .env with your preferences
-```
-
-4. **Start the addon:**
-
-```bash
 npm start
 ```
 
-5. **Access your addon at `http://localhost:3100`**
+Access your addon at `http://localhost:3100`
 
-### 🔺 Vercel Deployment
-
-1. Fork this repository to your GitHub account
-2. Deploy to Vercel:
-   - Connect your GitHub repository to Vercel
-   - Configure environment variables in the Vercel dashboard
-   - Vercel will auto-detect and deploy
-
----
 
 ## 🔧 Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `PORT` | ❌ | 3100 | Server port |
-| `LOG_LEVEL` | ❌ | info | Logging level: error, warn, info, debug |
-| `MAX_SUBTITLES` | ❌ | 10 | Maximum subtitles returned per language |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 3100 | Server port |
+| `SUBSENSE_BASE_URL` | Auto-detected | Public URL (for production deployments) |
+| `LOG_LEVEL` | info | Logging level: `debug`, `info`, `warn`, `error` |
+| `SUBTITLE_SOURCES` | All | Comma-separated list of sources |
+| `ENABLE_CACHE` | true | Enable/disable caching |
+| `CACHE_RETENTION_DAYS` | 30 | Days before cache cleanup |
+
+### Available Subtitle Sources
+
+`OpenSubtitles`, `Subdl`, `Subf2m`, `Podnapisi`, `AnimeTosho`, `Gestdown`
+
+## 📊 Stats & Monitoring
+
+Access the stats dashboard at `/stats` to view:
+- Request counts and cache hit rates
+- Provider performance metrics
+- Language availability statistics
+- Active user sessions
+
+Browse cached content at `/stats/content`.
 
 ---
 
-
 <div align="center">
-<p>Enjoy 😊</p>
+
+**Enjoy! 😊**
+
+[GitHub](https://github.com/NepiRaw/Stremio-SubSense) • [Issues](https://github.com/NepiRaw/Stremio-SubSense/issues)
+
 </div>

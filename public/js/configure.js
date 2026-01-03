@@ -302,11 +302,12 @@ function updateMaxSubtitlesUI(value) {
 
 /**
  * Restore selected languages from localStorage
+ * Pre-select English as default
  */
 function restoreSavedLanguages() {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
+        if (saved !== null) {
             const parsedLanguages = JSON.parse(saved);
             // Validate that saved codes are still valid and within limit
             const validCodes = LANGUAGES.map(l => l.code);
@@ -319,11 +320,15 @@ function restoreSavedLanguages() {
                 selectedLanguages.push(code);
                 addChip(code);
             });
+        } else {
+            // New user (no localStorage) - pre-select English as default
+            selectLanguage('eng');
         }
     } catch (error) {
         console.warn('Failed to restore languages from localStorage:', error);
-        // Clear corrupted data
+        // Clear corrupted data and apply English default
         localStorage.removeItem(STORAGE_KEY);
+        selectLanguage('eng');
     }
 }
 
@@ -372,7 +377,18 @@ function renderOptions(filterText = '') {
             <span class="check-mark">✓</span>
         `;
         
-        if (!isSelected) {
+        if (isSelected) {
+            // Toggle behavior: Click on selected item to deselect
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                removeLanguageWithFlash(lang.code);
+            });
+            // Hover effect for selected items
+            item.addEventListener('mouseenter', () => {
+                document.querySelectorAll('.option-item').forEach(el => el.classList.remove('highlighted'));
+                item.classList.add('highlighted');
+            });
+        } else {
             item.addEventListener('click', (e) => {
                 e.stopPropagation();
                 selectLanguage(lang.code);
@@ -459,6 +475,24 @@ function removeLanguage(code) {
         saveLanguagesToStorage(); // Persist to localStorage
         updateInstallButtonState();
         renderOptions(input.value); // Refresh list
+    }
+}
+
+/**
+ * Remove a language with flash animation (for dropdown toggle deselection)
+ */
+function removeLanguageWithFlash(code) {
+    const chip = inputWrapper.querySelector(`.multi-select-chip[data-code="${code}"]`);
+    if (chip) {
+        // Add flash animation
+        chip.classList.add('flash-remove');
+        
+        // Wait for animation to complete, then remove
+        setTimeout(() => {
+            removeLanguage(code);
+        }, 300);
+    } else {
+        removeLanguage(code);
     }
 }
 
@@ -684,14 +718,14 @@ function installAddon() {
         return;
     }
     
-    // Add loading state to button
+    // Add loading/success state to button with spinner
     const originalContent = installBtn.innerHTML;
     installBtn.disabled = true;
     installBtn.innerHTML = `
-        <span class="loader"></span>
+        <span class="spinner"></span>
         Opening Stremio...
     `;
-    installBtn.classList.add('loading');
+    installBtn.classList.add('success');
     
     // Also disable dropdown
     installDropdownToggle.disabled = true;
@@ -704,7 +738,7 @@ function installAddon() {
         setTimeout(() => {
             installBtn.innerHTML = originalContent;
             installBtn.disabled = false;
-            installBtn.classList.remove('loading');
+            installBtn.classList.remove('success');
             installDropdownToggle.disabled = false;
         }, 3000);
     }, 800);
