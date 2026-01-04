@@ -1107,11 +1107,15 @@ const { parseConfig } = require('./src/config');
  * URL formats:
  * - /{config}/subtitles/{type}/{id}.json (legacy - no UserID)
  * - /{userId}-{config}/subtitles/{type}/{id}.json (new - with 8-char UserID)
+ * - /{config}/subtitles/{type}/{id}/{extra}.json (with video metadata from Stremio web)
+ * 
+ * The :extra parameter contains video metadata like filename, videoSize, videoHash
+ * Example: filename=https://...&videoSize=123456&videoHash=abc123
  */
-app.get('/:config/subtitles/:type/:id.json', async (req, res) => {
-    const { config: configParam, type, id } = req.params;
+app.get('/:config/subtitles/:type/:id/:extra?.json', async (req, res) => {
+    const { config: configParam, type, id, extra } = req.params;
     
-    log('debug', `Subtitle request: config=${configParam}, type=${type}, id=${id}`);
+    log('debug', `Subtitle request: config=${configParam}, type=${type}, id=${id}, extra=${extra || 'none'}`);
     
     try {
         // Extract UserID if present (format: userId-config)
