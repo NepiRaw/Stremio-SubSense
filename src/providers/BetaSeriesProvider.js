@@ -166,6 +166,18 @@ class BetaSeriesProvider extends BaseProvider {
             return [];
         }
 
+        // BetaSeries only has French (fr/fre) and English (en/eng)
+        // Skip API call if requesting other languages
+        if (query.language) {
+            const lang = query.language.toLowerCase();
+            const supportedLanguages = ['fr', 'fre', 'en', 'eng'];
+            
+            if (!supportedLanguages.includes(lang)) {
+                log('debug', `[BetaSeriesProvider] Skipping - language "${lang}" not supported (only French and English)`);
+                return [];
+            }
+        }
+
         const startTime = Date.now();
         
         try {
