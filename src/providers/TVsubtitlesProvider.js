@@ -149,6 +149,39 @@ class TVsubtitlesProvider extends BaseProvider {
     }
 
     /**
+     * Calculate similarity between two strings (Dice coefficient)
+     * @private
+     */
+    _calculateSimilarity(str1, str2) {
+        if (!str1 || !str2) return 0;
+        
+        const s1 = str1.toLowerCase().trim();
+        const s2 = str2.toLowerCase().trim();
+        
+        if (s1 === s2) return 1;
+        if (s1.length < 2 || s2.length < 2) return 0;
+        
+        // Create bigrams
+        const getBigrams = (str) => {
+            const bigrams = new Set();
+            for (let i = 0; i < str.length - 1; i++) {
+                bigrams.add(str.substring(i, i + 2));
+            }
+            return bigrams;
+        };
+        
+        const bigrams1 = getBigrams(s1);
+        const bigrams2 = getBigrams(s2);
+        
+        let intersection = 0;
+        for (const bigram of bigrams1) {
+            if (bigrams2.has(bigram)) intersection++;
+        }
+        
+        return (2 * intersection) / (bigrams1.size + bigrams2.size);
+    }
+
+    /**
      * Search for show and get show ID
      * @private
      */
@@ -172,18 +205,43 @@ class TVsubtitlesProvider extends BaseProvider {
             const html = await response.text();
             const $ = cheerio.load(html);
 
-            // Find show link
-            const showLink = $('a[href^="/tvshow-"]').first().attr('href');
-            if (!showLink) {
+            // Find all show links and pick the best match
+            const showLinks = [];
+            $('a[href^="/tvshow-"]').each((i, el) => {
+                const href = $(el).attr('href');
+                const text = $(el).text().trim();
+                // Extract just the show name (remove year range like "2008-2009")
+                const showName = text.replace(/\s*\(\d{4}-\d{4}\)\s*$/, '').trim();
+                const match = href.match(/tvshow-(\d+)/);
+                if (match) {
+                    showLinks.push({
+                        showId: match[1],
+                        href,
+                        text,
+                        showName,
+                        similarity: this._calculateSimilarity(seriesName, showName)
+                    });
+                }
+            });
+
+            if (showLinks.length === 0) {
                 return null;
             }
 
-            const match = showLink.match(/tvshow-(\d+)/);
-            if (!match) {
+            // Sort by similarity and pick the best match
+            showLinks.sort((a, b) => b.similarity - a.similarity);
+            const bestMatch = showLinks[0];
+
+            // Require at least 50% similarity to avoid completely wrong matches
+            const SIMILARITY_THRESHOLD = 0.5;
+            if (bestMatch.similarity < SIMILARITY_THRESHOLD) {
+                log('debug', `[TVsubtitlesProvider] Best match "${bestMatch.showName}" has low similarity (${(bestMatch.similarity * 100).toFixed(1)}%) to "${seriesName}" - rejecting`);
                 return null;
             }
 
-            const showId = match[1];
+            log('debug', `[TVsubtitlesProvider] Matched "${seriesName}" to "${bestMatch.showName}" (${(bestMatch.similarity * 100).toFixed(1)}% similarity)`);
+
+            const showId = bestMatch.showId;
             this._showIdCache.set(seriesName, showId);
             return showId;
 
