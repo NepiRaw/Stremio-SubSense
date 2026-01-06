@@ -473,21 +473,23 @@ function formatForStremio(subtitles) {
         const subIdBase = sub.id || Date.now();
         
         if (isAss && proxyBaseUrl) {
-            // === DUAL FORMAT: Return both ASS (original) and SRT (converted) ===
+            // === DUAL FORMAT: Return both VTT (styled) and SRT (plain fallback) ===
+            // VTT comes first as it preserves styling (bold, italic, underline)
+            // SRT is fallback for players that don't support VTT
             
-            // 1. First: Original ASS subtitle (passthrough - no conversion)
-            const assUrl = `${proxyBaseUrl}/api/subtitle/ass/${sub.url}`;
+            // 1. First: VTT subtitle (converted from ASS with styling preserved)
+            const vttUrl = `${proxyBaseUrl}/api/subtitle/vtt/${sub.url}`;
             results.push({
-                id: `subsense-${outputIndex}-${subIdBase}-ass-${source}`,
-                url: assUrl,
+                id: `subsense-${outputIndex}-${subIdBase}-vtt-${source}`,
+                url: vttUrl,
                 lang: lang,
                 label: baseLabel,
                 source: source
             });
-            log('debug', `[formatForStremio] [${outputIndex}] ASS original: ${sub.url.substring(0, 50)}...`);
+            log('debug', `[formatForStremio] [${outputIndex}] VTT styled: ${sub.url.substring(0, 50)}...`);
             outputIndex++;
             
-            // 2. Second: Converted SRT subtitle (goes through converter)
+            // 2. Second: SRT subtitle (converted from ASS, no styling - fallback)
             const srtUrl = `${proxyBaseUrl}/api/subtitle/srt/${sub.url}`;
             results.push({
                 id: `subsense-${outputIndex}-${subIdBase}-srt-${source}`,
@@ -496,7 +498,7 @@ function formatForStremio(subtitles) {
                 label: baseLabel,
                 source: source
             });
-            log('debug', `[formatForStremio] [${outputIndex}] SRT converted: ${sub.url.substring(0, 50)}...`);
+            log('debug', `[formatForStremio] [${outputIndex}] SRT fallback: ${sub.url.substring(0, 50)}...`);
             outputIndex++;
             
         } else {
@@ -508,7 +510,8 @@ function formatForStremio(subtitles) {
             
             if (proxyBaseUrl && sub.needsConversion !== false) {
                 // Wrap in proxy for potential format inspection/conversion
-                url = `${proxyBaseUrl}/api/subtitle/srt/${sub.url}`;
+                // Use VTT endpoint to preserve styling if content turns out to be ASS
+                url = `${proxyBaseUrl}/api/subtitle/vtt/${sub.url}`;
                 log('debug', `[formatForStremio] [${outputIndex}] Proxying ${detectedFormat}: ${sub.url.substring(0, 50)}...`);
             }
             
@@ -524,15 +527,9 @@ function formatForStremio(subtitles) {
     }
     
     // Filter out any entries without valid URLs
-    const validResults = results.filter(sub => {
-        const valid = !!sub.url;
-        if (valid) {
-            log('debug', `[formatForStremio] Subtitle: id=${sub.id}, lang=${sub.lang}, source=${sub.source}`);
-        }
-        return valid;
-    });
+    const validResults = results.filter(sub => !!sub.url);
     
-    log('info', `[formatForStremio] Formatted ${subtitles.length} subtitles => ${validResults.length} entries (ASS duplicated as ASS+SRT)`);
+    log('info', `[formatForStremio] Formatted ${subtitles.length} subtitles => ${validResults.length} entries`);
     
     return validResults;
 }

@@ -7,7 +7,7 @@ const addonInterface = require('./addon');
 const { generateManifest } = require('./manifest');
 const statsService = require('./src/stats');
 const { log } = require('./src/utils');
-const { convertToSrt, isAssFormat } = require('./src/services/subtitle-converter');
+const { convertToSrt, convertSubtitle, isAssFormat } = require('./src/services/subtitle-converter');
 const { bufferToUtf8 } = require('./src/utils/encoding');
 
 const app = express();
@@ -498,9 +498,11 @@ app.get('/api/betaseries/proxy/:subtitleId', async (req, res) => {
         const cached = betaseriesSubtitleCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < BETASERIES_CACHE_TTL) {
             log('debug', `[BetaSeries Proxy] Cache HIT for ${cacheKey}`);
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            const contentType = cached.outputFormat === 'vtt' ? 'text/vtt; charset=utf-8' : 'text/plain; charset=utf-8';
+            res.setHeader('Content-Type', contentType);
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('X-BetaSeries-Cache', 'hit');
+            res.setHeader('X-BetaSeries-Output-Format', cached.outputFormat || 'srt');
             return res.send(cached.content);
         }
         
@@ -524,6 +526,7 @@ app.get('/api/betaseries/proxy/:subtitleId', async (req, res) => {
         const isZip = buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b;
         
         let originalFormat = 'srt';
+        let outputFormat = 'srt'; // Will be 'vtt' for converted ASS files
         
         if (isZip) {
             if (!AdmZip) {
@@ -614,14 +617,15 @@ app.get('/api/betaseries/proxy/:subtitleId', async (req, res) => {
                 log('debug', `[BetaSeries Proxy] Extracted: ${targetEntry.entryName} (format: ${originalFormat})`);
                 const extractedContent = bufferToUtf8(targetEntry.getData());
                 
-                // If ASS file, convert to SRT
+                // If ASS file, convert to VTT (preserves styling)
                 if (originalFormat === 'ass') {
-                    log('debug', `[BetaSeries Proxy] Converting ASS to SRT...`);
-                    const result = convertToSrt(extractedContent);
-                    srtContent = result.srt;
-                    log('info', `[BetaSeries Proxy] Converted ${result.captionCount} captions from ASS to SRT`);
+                    const result = convertSubtitle(extractedContent);
+                    srtContent = result.content;
+                    outputFormat = result.format;
+                    log('info', `[BetaSeries Proxy] Converted ${result.captionCount} captions from ASS to ${result.format.toUpperCase()}`);
                 } else {
                     srtContent = extractedContent;
+                    outputFormat = 'srt';
                 }
                 
             } catch (zipError) {
@@ -634,13 +638,14 @@ app.get('/api/betaseries/proxy/:subtitleId', async (req, res) => {
             const rawContent = bufferToUtf8(buffer);
             
             if (isAssFormat(rawContent)) {
-                log('debug', `[BetaSeries Proxy] Direct ASS file detected, converting...`);
                 originalFormat = 'ass';
-                const result = convertToSrt(rawContent);
-                srtContent = result.srt;
-                log('info', `[BetaSeries Proxy] Converted ${result.captionCount} captions from ASS to SRT`);
+                const result = convertSubtitle(rawContent);
+                srtContent = result.content;
+                outputFormat = result.format;
+                log('info', `[BetaSeries Proxy] Converted ${result.captionCount} captions from ASS to ${result.format.toUpperCase()}`);
             } else {
                 originalFormat = 'srt';
+                outputFormat = 'srt';
                 srtContent = rawContent;
                 log('debug', `[BetaSeries Proxy] Direct SRT file (${srtContent.length} chars)`);
             }
@@ -650,18 +655,22 @@ app.get('/api/betaseries/proxy/:subtitleId', async (req, res) => {
         betaseriesSubtitleCache.set(cacheKey, {
             content: srtContent,
             originalFormat: originalFormat,
+            outputFormat: outputFormat,
             timestamp: Date.now()
         });
-        log('debug', `[BetaSeries Proxy] Cached: ${cacheKey}`);
+        log('debug', `[BetaSeries Proxy] Cached: ${cacheKey} (format: ${outputFormat})`);
         
-        // Return the SRT content
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        // Return the subtitle content with appropriate Content-Type
+        const contentType = outputFormat === 'vtt' ? 'text/vtt; charset=utf-8' : 'text/plain; charset=utf-8';
+        res.setHeader('Content-Type', contentType);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('X-BetaSeries-Cache', 'miss');
         res.setHeader('X-BetaSeries-Extracted', isZip ? 'yes' : 'no');
         res.setHeader('X-BetaSeries-Original-Format', originalFormat);
+        res.setHeader('X-BetaSeries-Output-Format', outputFormat);
         if (originalFormat === 'ass') {
             res.setHeader('X-BetaSeries-Converted', 'yes');
+            res.setHeader('X-BetaSeries-Styling', 'preserved');
         }
         res.send(srtContent);
         
@@ -712,9 +721,11 @@ app.get('/api/yify/proxy/:subtitleId', async (req, res) => {
         const cached = yifySubtitleCache.get(subtitleId);
         if (cached && Date.now() - cached.timestamp < YIFY_CACHE_TTL) {
             log('debug', `[YIFY Proxy] Cache HIT for ${subtitleId}`);
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            const contentType = cached.outputFormat === 'vtt' ? 'text/vtt; charset=utf-8' : 'text/plain; charset=utf-8';
+            res.setHeader('Content-Type', contentType);
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('X-YIFY-Cache', 'hit');
+            res.setHeader('X-YIFY-Output-Format', cached.outputFormat || 'srt');
             return res.send(cached.content);
         }
         
@@ -804,29 +815,35 @@ app.get('/api/yify/proxy/:subtitleId', async (req, res) => {
         let srtContent = bufferToUtf8(subtitleEntry.getData());
         log('debug', `[YIFY Proxy] Extracted: ${subtitleEntry.entryName} (format: ${entryFormat}, ${srtContent.length} chars)`);
         
-        // Convert ASS to SRT if needed
+        let outputFormat = 'srt';
+        
+        // Convert ASS to VTT if needed (preserves styling)
         if (entryFormat === 'ass') {
-            log('debug', '[YIFY Proxy] Converting ASS to SRT...');
-            const result = convertToSrt(srtContent);
-            srtContent = result.srt;
-            log('info', `[YIFY Proxy] Converted ASS to SRT (${result.captionCount} captions)`);
+            const result = convertSubtitle(srtContent);
+            srtContent = result.content;
+            outputFormat = result.format;
+            log('info', `[YIFY Proxy] Converted ASS to ${result.format.toUpperCase()} (${result.captionCount} captions)`);
         }
         
         // Cache the result
         yifySubtitleCache.set(subtitleId, {
             content: srtContent,
             originalFormat: entryFormat,
+            outputFormat: outputFormat,
             timestamp: Date.now()
         });
         
-        // Return the SRT content
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        // Return the subtitle content with appropriate Content-Type
+        const contentType = outputFormat === 'vtt' ? 'text/vtt; charset=utf-8' : 'text/plain; charset=utf-8';
+        res.setHeader('Content-Type', contentType);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('X-YIFY-Cache', 'miss');
         res.setHeader('X-YIFY-Extracted', 'yes');
         res.setHeader('X-YIFY-Original-Format', entryFormat);
+        res.setHeader('X-YIFY-Output-Format', outputFormat);
         if (entryFormat === 'ass') {
             res.setHeader('X-YIFY-Converted', 'yes');
+            res.setHeader('X-YIFY-Styling', 'preserved');
         }
         res.send(srtContent);
         
@@ -877,9 +894,11 @@ app.get('/api/tvsubtitles/proxy/:subtitleId', async (req, res) => {
         const cached = tvsubsSubtitleCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < TVSUBS_CACHE_TTL) {
             log('debug', `[TVsubs Proxy] Cache HIT for ${cacheKey}`);
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            const contentType = cached.outputFormat === 'vtt' ? 'text/vtt; charset=utf-8' : 'text/plain; charset=utf-8';
+            res.setHeader('Content-Type', contentType);
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('X-TVsubs-Cache', 'hit');
+            res.setHeader('X-TVsubs-Output-Format', cached.outputFormat || 'srt');
             return res.send(cached.content);
         }
         
@@ -963,6 +982,7 @@ app.get('/api/tvsubtitles/proxy/:subtitleId', async (req, res) => {
         
         let srtContent;
         let originalFormat = 'srt';
+        let outputFormat = 'srt'; // Will be 'vtt' for converted ASS files
         
         if (isZip) {
             if (!AdmZip) {
@@ -1004,12 +1024,12 @@ app.get('/api/tvsubtitles/proxy/:subtitleId', async (req, res) => {
             srtContent = bufferToUtf8(subtitleEntry.getData());
             log('debug', `[TVsubs Proxy] Extracted: ${subtitleEntry.entryName} (format: ${originalFormat})`);
             
-            // Convert ASS to SRT if needed
+            // Convert ASS to VTT if needed (preserves styling)
             if (originalFormat === 'ass') {
-                log('debug', '[TVsubs Proxy] Converting ASS to SRT...');
-                const result = convertToSrt(srtContent);
-                srtContent = result.srt;
-                log('info', `[TVsubs Proxy] Converted ASS to SRT (${result.captionCount} captions)`);
+                const result = convertSubtitle(srtContent);
+                srtContent = result.content;
+                outputFormat = result.format;
+                log('info', `[TVsubs Proxy] Converted ASS to ${result.format.toUpperCase()} (${result.captionCount} captions)`);
             }
         } else {
             // Raw content - check if ASS
@@ -1017,10 +1037,10 @@ app.get('/api/tvsubtitles/proxy/:subtitleId', async (req, res) => {
             
             if (isAssFormat(srtContent)) {
                 originalFormat = 'ass';
-                log('debug', '[TVsubs Proxy] Raw ASS content, converting to SRT...');
-                const result = convertToSrt(srtContent);
-                srtContent = result.srt;
-                log('info', `[TVsubs Proxy] Converted ASS to SRT (${result.captionCount} captions)`);
+                const result = convertSubtitle(srtContent);
+                srtContent = result.content;
+                outputFormat = result.format;
+                log('info', `[TVsubs Proxy] Converted ASS to ${result.format.toUpperCase()} (${result.captionCount} captions)`);
             } else {
                 log('debug', `[TVsubs Proxy] Raw SRT content (${srtContent.length} chars)`);
             }
@@ -1030,17 +1050,21 @@ app.get('/api/tvsubtitles/proxy/:subtitleId', async (req, res) => {
         tvsubsSubtitleCache.set(cacheKey, {
             content: srtContent,
             originalFormat: originalFormat,
+            outputFormat: outputFormat,
             timestamp: Date.now()
         });
         
-        // Return the SRT content
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        // Return the subtitle content with appropriate Content-Type
+        const contentType = outputFormat === 'vtt' ? 'text/vtt; charset=utf-8' : 'text/plain; charset=utf-8';
+        res.setHeader('Content-Type', contentType);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('X-TVsubs-Cache', 'miss');
         res.setHeader('X-TVsubs-Extracted', isZip ? 'yes' : 'no');
         res.setHeader('X-TVsubs-Original-Format', originalFormat);
+        res.setHeader('X-TVsubs-Output-Format', outputFormat);
         if (originalFormat === 'ass') {
             res.setHeader('X-TVsubs-Converted', 'yes');
+            res.setHeader('X-TVsubs-Styling', 'preserved');
         }
         res.send(srtContent);
         
@@ -1088,17 +1112,32 @@ app.get('/api/subtitle/:format/*', async (req, res) => {
             return res.send(content);
         }
         
-        // If SRT format requested and content is ASS, convert it
+        // If VTT format requested and content is ASS, convert it (preserves styling)
+        if (format === 'vtt' && isAssFormat(content)) {
+            const result = convertSubtitle(content);
+            
+            log('info', `Subtitle converted: ${result.originalFormat} → ${result.format.toUpperCase()} (${result.captionCount} captions)`);
+            
+            res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('X-Original-Format', result.originalFormat);
+            res.setHeader('X-Caption-Count', result.captionCount);
+            res.setHeader('X-SubSense-Format', 'converted-to-vtt');
+            res.setHeader('X-SubSense-Styling', 'preserved');
+            return res.send(result.content);
+        }
+        
+        // If SRT format requested and content is ASS, convert it (loses styling)
         if (format === 'srt' && isAssFormat(content)) {
-            log('debug', `Converting ASS to SRT (${content.length} chars)`);
+            log('debug', `Converting ASS to SRT (${content.length} chars) - NOTE: styling will be lost`);
             
             const result = convertToSrt(content);
             
-            log('info', `Subtitle converted: ${result.originalFormat} → SRT (${result.captionCount} captions)`);
+            log('info', `Subtitle converted: ass → SRT (${result.captionCount} captions)`);
             
             res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('X-Original-Format', result.originalFormat);
+            res.setHeader('X-Original-Format', 'ass');
             res.setHeader('X-Caption-Count', result.captionCount);
             res.setHeader('X-SubSense-Format', 'converted-to-srt');
             return res.send(result.srt);

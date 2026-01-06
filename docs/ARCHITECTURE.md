@@ -28,7 +28,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 
 - **Multi-source aggregation**: Uses multiple providers including wyzie-lib (OpenSubtitles, SubDL, Podnapisi, Subf2m, AnimeTosho, Gestdown), BetaSeries, YIFY, and TVsubtitles
 - **Multi-language support**: Up to 5 languages with equal priority
-- **Dual format support**: ASS subtitles returned in both original and converted SRT format
+- **Dual format support**: ASS subtitles converted to VTT (with styling) + SRT (fallback)
 - **Configurable limits**: User-selectable max subtitles per language
 - **SQLite caching**: Persistent cache with automatic cleanup
 - **Statistics dashboard**: Real-time analytics on usage and cache performance
@@ -140,7 +140,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 
 | File | Purpose |
 |------|---------|
-| `subtitle-converter.js` | ASS/SSA to SRT conversion |
+| `subtitle-converter.js` | ASS/SSA to VTT/SRT conversion with styling preservation |
 
 ### 3.6 Utilities (src/utils/)
 
@@ -264,7 +264,7 @@ When Stremio requests subtitles:
 
 7. formatForStremio():
    - For each subtitle:
-     - If ASS format: Return BOTH ASS + SRT entries
+     - If ASS format: Return BOTH VTT (styled) + SRT (fallback) entries
      - If SRT format: Return single entry
    - Generate unique IDs: subsense-{index}-{subId}-{format}-{source}
    - Build proxy URLs for subtitle conversion
@@ -302,10 +302,15 @@ When Stremio fetches an actual subtitle file:
 3. If format=ass:
    - Pass through as-is (no conversion)
    
-4. If format=srt and content is ASS:
-   - Convert ASS to SRT using subtitle-converter
+4. If format=vtt and content is ASS:
+   - Convert ASS to VTT using subtitle-converter
+   - Preserves styling (italic, bold, underline)
    
-5. Return subtitle content
+5. If format=srt and content is ASS:
+   - Convert ASS to SRT using subtitle-converter
+   - Styling is lost (SRT doesn't support it)
+   
+6. Return subtitle content with appropriate Content-Type
 ```
 
 ---
@@ -431,7 +436,7 @@ searchFastFirstMulti(query, languages) {
 }
 ```
 
-### 7.3 Dual Format (ASS + SRT)
+### 7.3 Dual Format (VTT + SRT)
 
 When an ASS subtitle is found:
 
@@ -439,13 +444,13 @@ When an ASS subtitle is found:
 formatForStremio(subtitles) {
   for (sub of subtitles) {
     if (isAss) {
-      // Entry 1: Original ASS
+      // Entry 1: VTT with styling preserved (italic, bold, underline)
       results.push({
-        id: 'subsense-0-{subId}-ass-{source}',
-        url: '/api/subtitle/ass/{originalUrl}'
+        id: 'subsense-0-{subId}-vtt-{source}',
+        url: '/api/subtitle/vtt/{originalUrl}'
       });
       
-      // Entry 2: Converted SRT
+      // Entry 2: SRT fallback (plain text, no styling)
       results.push({
         id: 'subsense-1-{subId}-srt-{source}',
         url: '/api/subtitle/srt/{originalUrl}'
@@ -596,8 +601,9 @@ window.location.href = url;
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/subtitle/srt/*` | GET | Convert to SRT |
-| `/api/subtitle/ass/*` | GET | Passthrough ASS |
+| `/api/subtitle/vtt/*` | GET | Convert ASS to VTT (preserves styling) |
+| `/api/subtitle/srt/*` | GET | Convert ASS to SRT (plain text) |
+| `/api/subtitle/ass/*` | GET | Passthrough ASS (no conversion) |
 
 ### 11.3 Stats API
 
@@ -682,7 +688,7 @@ Stremio-SubSense/
 │   │   └── cache-cleaner.js
 │   │
 │   ├── services/
-│   │   └── subtitle-converter.js  # ASS→SRT conversion
+│   │   └── subtitle-converter.js  # ASS→VTT/SRT conversion with styling
 │   │
 │   └── utils/
 │       └── validators.js    # Input validation
