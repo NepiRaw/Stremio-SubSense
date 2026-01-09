@@ -9,6 +9,7 @@ const statsService = require('./src/stats');
 const { log } = require('./src/utils');
 const { convertToSrt, convertSubtitle, isAssFormat } = require('./src/services/subtitle-converter');
 const { bufferToUtf8 } = require('./src/utils/encoding');
+const { preloadParser } = require('./src/utils/filenameMatcher');
 
 const app = express();
 const PORT = process.env.PORT || 3100;
@@ -575,6 +576,13 @@ try {
     log('warn', 'adm-zip not installed - BetaSeries ZIP extraction disabled');
 }
 
+let UnrarJs = null;
+try {
+    UnrarJs = require('node-unrar-js');
+} catch (e) {
+    log('warn', 'node-unrar-js not installed - RAR extraction disabled');
+}
+
 // Simple in-memory cache for extracted subtitles (with TTL)
 const betaseriesSubtitleCache = new Map();
 const BETASERIES_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
@@ -989,22 +997,23 @@ setInterval(cleanSubsourceCache, 60 * 60 * 1000);
 
 app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
     const { subtitleId } = req.params;
-    const { key, episode, filename } = req.query;
+    const { key, season, episode, filename } = req.query;
     
-    const cacheKey = `${subtitleId}:${episode || 'all'}`;
-    
-    log('debug', `[SubSource Proxy] Request: subtitleId=${subtitleId}, episode=${episode}`);
+    const cacheKey = `${subtitleId}:${season || 'all'}:${episode || 'all'}`;
     
     try {
         // Check cache first
         const cached = subsourceSubtitleCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < SUBSOURCE_CACHE_TTL) {
-            log('debug', `[SubSource Proxy] Cache HIT for ${cacheKey}`);
             const contentType = cached.outputFormat === 'vtt' ? 'text/vtt; charset=utf-8' : 'text/plain; charset=utf-8';
             res.setHeader('Content-Type', contentType);
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('X-SubSource-Cache', 'hit');
             res.setHeader('X-SubSource-Output-Format', cached.outputFormat || 'srt');
+            res.setHeader('X-SubSource-Original-Format', cached.originalFormat || 'srt');
+            if (cached.selectedFile) {
+                res.setHeader('X-SubSource-Selected-File', cached.selectedFile);
+            }
             return res.send(cached.content);
         }
         
@@ -1031,7 +1040,6 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
         
         // Download ZIP from SubSource API
         const downloadUrl = `https://api.subsource.net/api/v1/subtitles/${subtitleId}/download`;
-        log('debug', `[SubSource Proxy] Downloading: ${downloadUrl}`);
         
         const zipResponse = await fetch(downloadUrl, {
             headers: {
@@ -1058,33 +1066,81 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
         
         const buffer = Buffer.from(await zipResponse.arrayBuffer());
         
-        // Check if it's a ZIP file
-        const isZip = buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+        // Check file type by magic bytes
+        const isZip = buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b; // 'PK'
+        const isRar = buffer.length >= 4 && buffer[0] === 0x52 && buffer[1] === 0x61 && 
+                      buffer[2] === 0x72 && buffer[3] === 0x21; // 'Rar!'
         
-        if (!isZip) {
-            log('error', '[SubSource Proxy] Response is not a ZIP file');
-            return res.status(500).send('Invalid response from SubSource');
-        }
-        
-        if (!AdmZip) {
-            log('error', '[SubSource Proxy] adm-zip not installed');
-            return res.status(500).send('ZIP extraction not available');
-        }
-        
-        const zip = new AdmZip(buffer);
-        const entries = zip.getEntries();
-        
-        // Filter to subtitle files only
+        // Variables for extracted files
+        let subtitleEntries = [];
         const SUBTITLE_EXTENSIONS = ['.srt', '.vtt', '.ass', '.ssa', '.sub', '.smi'];
-        const subtitleEntries = entries.filter(entry => {
-            const name = entry.entryName.toLowerCase();
-            return !name.startsWith('._') && 
-                   !name.startsWith('__MACOSX') &&
-                   SUBTITLE_EXTENSIONS.some(ext => name.endsWith(ext));
-        });
+        
+        if (isZip) {
+            // Handle ZIP files
+            if (!AdmZip) {
+                log('error', '[SubSource Proxy] adm-zip not installed');
+                return res.status(500).send('ZIP extraction not available');
+            }
+            
+            const zip = new AdmZip(buffer);
+            const entries = zip.getEntries();
+            
+            subtitleEntries = entries.filter(entry => {
+                const name = entry.entryName.toLowerCase();
+                return !name.startsWith('._') && 
+                       !name.startsWith('__MACOSX') &&
+                       SUBTITLE_EXTENSIONS.some(ext => name.endsWith(ext));
+            }).map(entry => ({
+                name: entry.entryName,
+                getData: () => entry.getData()
+            }));
+            
+        } else if (isRar) {
+            if (!UnrarJs) {
+                log('error', '[SubSource Proxy] node-unrar-js not installed');
+                return res.status(500).send('RAR extraction not available');
+            }
+            
+            try {
+                const extractor = await UnrarJs.createExtractorFromData({ data: buffer });
+                const list = extractor.getFileList();
+                const fileHeaders = [...list.fileHeaders];
+                
+                // Filter to subtitle files only
+                const subtitleHeaders = fileHeaders.filter(header => {
+                    const name = header.name.toLowerCase();
+                    return !header.flags.directory &&
+                           !name.startsWith('._') && 
+                           !name.startsWith('__MACOSX') &&
+                           SUBTITLE_EXTENSIONS.some(ext => name.endsWith(ext));
+                });
+                
+                // Extract each subtitle file
+                for (const header of subtitleHeaders) {
+                    const extracted = extractor.extract({ files: [header.name] });
+                    const files = [...extracted.files];
+                    if (files.length > 0 && files[0].extraction) {
+                        subtitleEntries.push({
+                            name: header.name,
+                            getData: () => Buffer.from(files[0].extraction)
+                        });
+                    }
+                }
+            } catch (rarError) {
+                log('error', `[SubSource Proxy] RAR extraction failed: ${rarError.message}`);
+                return res.status(500).send('Failed to extract RAR archive');
+            }
+            
+        } else {
+            // Unknown format
+            const contentType = zipResponse.headers.get('content-type') || 'unknown';
+            const preview = buffer.toString('utf8', 0, Math.min(200, buffer.length));
+            log('error', `[SubSource Proxy] Unknown archive format. Content-Type: ${contentType}, Preview: ${preview.substring(0, 100)}`);
+            return res.status(500).send('Unknown archive format from SubSource');
+        }
         
         if (subtitleEntries.length === 0) {
-            log('error', '[SubSource Proxy] No subtitle files found in ZIP');
+            log('error', '[SubSource Proxy] No subtitle files found in archive');
             return res.status(404).send('No subtitle files found in archive');
         }
         
@@ -1096,35 +1152,73 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
             // Single file - use it directly
             selectedEntry = subtitleEntries[0];
         } else if (episode) {
-            // Multiple files - try to match episode
+            // Multiple files - try to match episode (and season if provided)
             const epNum = episode.toString().padStart(2, '0');
-            // Same patterns as SubSourceProvider._filterByEpisode for consistency
-            const patterns = [
-                new RegExp(`[sS]\\d+[eE]${epNum}\\b`, 'i'),  // S01E07 (most reliable)
+            const seNum = season ? season.toString().padStart(2, '0') : null;
+            
+            // Build patterns - prefer season+episode combo if season is provided
+            const patterns = [];
+            
+            if (seNum) {
+                // Most specific: S01E07 with exact season
+                patterns.push(new RegExp(`[sS]${seNum}[eE]${epNum}\\b`, 'i'));
+                patterns.push(new RegExp(`[sS]0*${season}[eE]${epNum}\\b`, 'i')); // S1E07 variant
+            }
+            
+            // Less specific patterns (fallback if no season match)
+            patterns.push(
+                new RegExp(`[sS]\\d+[eE]${epNum}\\b`, 'i'),  // S##E07 (any season)
                 new RegExp(`[eE]${epNum}\\b`, 'i'),          // E07
                 new RegExp(`x${epNum}\\b`, 'i'),             // 1x07
                 new RegExp(`\\.${epNum}\\.`, 'i'),           // .07.
                 new RegExp(`-${epNum}-`, 'i'),               // -07-
                 new RegExp(` ${epNum} `),                    // " 07 " (space-padded)
                 new RegExp(`\\b${epNum}\\b`),                // bare number (less reliable, try last)
-            ];
+            );
             
-            for (const entry of subtitleEntries) {
-                const name = entry.entryName;
-                for (const pattern of patterns) {
-                    if (pattern.test(name)) {
+            // First pass: try to match with exact season if provided
+            if (seNum) {
+                const exactSeasonPattern = new RegExp(`[sS]0*${season}[eE]${epNum}\\b`, 'i');
+                for (const entry of subtitleEntries) {
+                    if (exactSeasonPattern.test(entry.name)) {
                         selectedEntry = entry;
                         break;
                     }
                 }
-                if (selectedEntry) break;
+            }
+            
+            // Second pass: fallback to episode-only patterns
+            if (!selectedEntry) {
+                for (const entry of subtitleEntries) {
+                    const name = entry.name;
+                    
+                    // Skip files from wrong season if season is specified
+                    if (seNum) {
+                        // Check if file explicitly mentions a different season
+                        const seasonMatch = name.match(/[sS](\d+)[eE]/i);
+                        if (seasonMatch) {
+                            const fileSeason = parseInt(seasonMatch[1], 10);
+                            if (fileSeason !== parseInt(season, 10)) {
+                                continue; // Skip files from wrong season
+                            }
+                        }
+                    }
+                    
+                    for (const pattern of patterns) {
+                        if (pattern.test(name)) {
+                            selectedEntry = entry;
+                            break;
+                        }
+                    }
+                    if (selectedEntry) break;
+                }
             }
             
             // Fallback to filename matching if provided
             if (!selectedEntry && filename) {
                 const filenameLower = filename.toLowerCase();
                 for (const entry of subtitleEntries) {
-                    const entryLower = entry.entryName.toLowerCase();
+                    const entryLower = entry.name.toLowerCase();
                     // Check if release group or other identifiers match
                     const filenameParts = filenameLower.split(/[\.\-\_\s]+/);
                     const entryParts = entryLower.split(/[\.\-\_\s]+/);
@@ -1135,16 +1229,22 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
                     }
                 }
             }
+            
+            // If episode was specified but no match found, return 404 instead of wrong episode
+            if (!selectedEntry && episode) {
+                log('warn', `[SubSource Proxy] Episode ${episode} not found in archive (has: ${subtitleEntries.map(e => e.name).join(', ')})`);
+                return res.status(404).send(`Episode ${episode} not found in this subtitle pack`);
+            }
         }
         
-        // Fallback: prefer SRT, then first file
+        // Fallback: prefer SRT, then first file (only for non-episode requests like movies)
         if (!selectedEntry) {
-            selectedEntry = subtitleEntries.find(e => e.entryName.toLowerCase().endsWith('.srt')) ||
+            selectedEntry = subtitleEntries.find(e => e.name.toLowerCase().endsWith('.srt')) ||
                            subtitleEntries[0];
         }
         
         // Determine format from extension
-        const selectedName = selectedEntry.entryName.toLowerCase();
+        const selectedName = selectedEntry.name.toLowerCase();
         if (selectedName.endsWith('.ass') || selectedName.endsWith('.ssa')) {
             entryFormat = 'ass';
         } else if (selectedName.endsWith('.vtt')) {
@@ -1154,7 +1254,6 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
         }
         
         let content = bufferToUtf8(selectedEntry.getData());
-        log('debug', `[SubSource Proxy] Extracted: ${selectedEntry.entryName} (format: ${entryFormat}, ${content.length} chars)`);
         
         let outputFormat = entryFormat;
         
@@ -1171,7 +1270,7 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
             content: content,
             originalFormat: entryFormat,
             outputFormat: outputFormat,
-            selectedFile: selectedEntry.entryName,
+            selectedFile: selectedEntry.name,
             timestamp: Date.now()
         });
         
@@ -1183,7 +1282,7 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
         res.setHeader('X-SubSource-Extracted', 'yes');
         res.setHeader('X-SubSource-Original-Format', entryFormat);
         res.setHeader('X-SubSource-Output-Format', outputFormat);
-        res.setHeader('X-SubSource-Selected-File', selectedEntry.entryName);
+        res.setHeader('X-SubSource-Selected-File', selectedEntry.name);
         if (entryFormat === 'ass') {
             res.setHeader('X-SubSource-Converted', 'yes');
         }
@@ -1518,6 +1617,24 @@ app.get('/:config/subtitles/:type/:id/:extra?.json', async (req, res) => {
     
     log('debug', `Subtitle request: config=${configParam}, type=${type}, id=${id}, extra=${extra || 'none'}`);
     
+    // Parse extra parameters from URL-encoded string (e.g., videoHash=xxx&videoSize=123&filename=xxx)
+    let parsedExtra = {};
+    if (extra && extra !== 'none') {
+        try {
+            const params = new URLSearchParams(extra);
+            for (const [key, value] of params) {
+                if (/^\d+$/.test(value)) {
+                    parsedExtra[key] = parseInt(value, 10);
+                } else {
+                    parsedExtra[key] = decodeURIComponent(value);
+                }
+            }
+            log('debug', `[Stremio Extra] Parsed: ${JSON.stringify(parsedExtra)}`);
+        } catch (parseErr) {
+            log('debug', `[Stremio Extra] Failed to parse: ${parseErr.message}`);
+        }
+    }
+    
     try {
         // Extract UserID if present (format: userId-config)
         let userId = null;
@@ -1571,7 +1688,8 @@ app.get('/:config/subtitles/:type/:id/:extra?.json', async (req, res) => {
         const args = {
             type,
             id,
-            config: validatedConfig
+            config: validatedConfig,
+            extra: parsedExtra  // Include Stremio extra parameters (videoHash, videoSize, filename)
         };
         
         // Handle the subtitle request
@@ -1593,7 +1711,7 @@ app.get('/:config/subtitles/:type/:id/:extra?.json', async (req, res) => {
 app.use(getRouter(addonInterface));
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     log('info', `[Server] SubSense addon running at ${PUBLIC_BASE_URL}`);
     log('info', `[Server] Configure at ${PUBLIC_BASE_URL}/configure`);
     log('info', `[Server] Stats at ${PUBLIC_BASE_URL}/stats`);
@@ -1601,4 +1719,7 @@ app.listen(PORT, () => {
     if (PUBLIC_BASE_URL !== LOCAL_BASE_URL) {
         log('info', `[Server] Internal proxy URL: ${LOCAL_BASE_URL}`);
     }
+    
+    // Preload filename parser for faster first request
+    await preloadParser();
 });

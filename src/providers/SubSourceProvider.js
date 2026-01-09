@@ -166,12 +166,8 @@ class SubSourceProvider extends BaseProvider {
                 this.updateStats(true, Date.now() - startTime, 0);
                 return [];
             }
-            
-            // Filter by episode if this is a series
+
             let subtitles = result.data;
-            if (query.season && query.episode) {
-                subtitles = this._filterByEpisode(subtitles, query.episode);
-            }
             
             // Convert to SubtitleResult format
             const results = subtitles.map(sub => this._toSubtitleResult(sub, query));
@@ -236,6 +232,9 @@ class SubSourceProvider extends BaseProvider {
         
         if (query.encryptedApiKey) {
             params.set('key', query.encryptedApiKey);
+        }
+        if (query.season) {
+            params.set('season', query.season.toString());
         }
         if (query.episode) {
             params.set('episode', query.episode.toString());

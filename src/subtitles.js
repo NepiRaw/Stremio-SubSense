@@ -3,6 +3,7 @@ const { parseStremioId, log } = require('./utils');
 const { mapStremioToWyzie, mapWyzieToStremio, normalizeLanguageCode } = require('./languages');
 const statsService = require('./stats');
 const { isAssFormat } = require('./services/subtitle-converter');
+const { sortByFilenameSimilarityAsync, isRealFilename, preloadParser } = require('./utils/filenameMatcher');
 
 // Crypto utilities for encrypting API keys in download URLs
 let encryptConfig = null;
@@ -142,8 +143,14 @@ async function handleSubtitles(args, config) {
         const { subtitles: prioritized, languageMatch } = prioritizeSubtitlesMulti(rawSubtitles, languages, maxSubtitles);
         log('debug', `After prioritization: ${prioritized.length} subtitles`);
 
+        // Sort by filename similarity if a real filename was provided
+        let sortedSubtitles = prioritized;
+        if (videoContext.filename && isRealFilename(videoContext.filename)) {
+            sortedSubtitles = await sortByFilenameSimilarityAsync(prioritized, videoContext.filename, parsed.type);
+        }
+
         // Format for Stremio
-        const formatted = formatForStremio(prioritized);
+        const formatted = formatForStremio(sortedSubtitles);
 
         // Track stats
         const fetchTimeMs = Date.now() - startTime;
