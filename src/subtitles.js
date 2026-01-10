@@ -3,7 +3,7 @@ const { parseStremioId, log } = require('./utils');
 const { mapStremioToWyzie, mapWyzieToStremio, normalizeLanguageCode } = require('./languages');
 const statsService = require('./stats');
 const { isAssFormat } = require('./services/subtitle-converter');
-const { sortByFilenameSimilarityAsync, isRealFilename, preloadParser } = require('./utils/filenameMatcher');
+const { sortByFilenameSimilarityAsync, isRealFilename } = require('./utils/filenameMatcher');
 
 // Crypto utilities for encrypting API keys in download URLs
 let encryptConfig = null;
@@ -34,6 +34,10 @@ if (ENABLE_CACHE) {
 
 // Flag to use fast-first strategy (can be made configurable later)
 const USE_FAST_FIRST = true;
+
+// Fast-First timeout: return whatever we have after this timeout (8 seconds)
+// Slow providers (e.g., BetaSeries) will continue in background and cache results
+const FAST_FIRST_TIMEOUT_MS = 8000;
 
 /**
  * Handle subtitle request from Stremio
@@ -233,16 +237,48 @@ async function handleSubtitles(args, config) {
 }
 
 /**
- * Fetch subtitles using multi-language fast-first parallel strategy
- * Calls ALL enabled providers in parallel, combining results
+ * Race a provider promise against a deadline. Returns early result or null if timed out.
+ * @param {Promise} promise - Provider search promise
+ * @param {string} name - Provider name for logging
+ * @param {number} deadline - Deadline timestamp (Date.now() + timeout)
+ * @returns {Object} { name, result, timedOut, promise }
+ */
+async function raceProviderWithDeadline(promise, name, deadline) {
+    const remainingTime = Math.max(0, deadline - Date.now());
+    
+    if (remainingTime <= 0) {
+        return { name, result: null, timedOut: true, promise };
+    }
+    
+    const timeoutPromise = new Promise(resolve => 
+        setTimeout(() => resolve({ timedOut: true }), remainingTime)
+    );
+    
+    try {
+        const raceResult = await Promise.race([
+            promise.then(result => ({ result, timedOut: false })),
+            timeoutPromise
+        ]);
+        
+        if (raceResult.timedOut) {
+            log('debug', `[FastFirst] ${name} timed out after ${FAST_FIRST_TIMEOUT_MS - remainingTime}ms`);
+            return { name, result: null, timedOut: true, promise };
+        }
+        
+        return { name, result: raceResult.result, timedOut: false, promise: null };
+    } catch (error) {
+        log('debug', `[FastFirst] ${name} failed: ${error.message}`);
+        return { name, result: null, timedOut: false, error, promise: null };
+    }
+}
+
+/**
+ * Fetch subtitles from all providers with Fast-First timeout strategy.
+ * Returns available results after FAST_FIRST_TIMEOUT_MS, slow providers continue in background.
  * @param {Object} parsed - Parsed Stremio ID
- * @param {Array<string>} languages - Array of language codes (2-letter)
+ * @param {Array} languages - Array of 2-letter language codes
  * @param {Object} videoContext - Video file context from Stremio (optional)
- * @param {string|null} videoContext.videoHash - OpenSubtitles-style hash
- * @param {number|null} videoContext.videoSize - File size in bytes
- * @param {string|null} videoContext.filename - Video filename
  * @param {Object} config - User configuration (optional)
- * @param {string|null} config.subsourceApiKey - SubSource API key (if configured)
  * @returns {Object} { subtitles, fromCache, backgroundPromise }
  */
 async function fetchSubtitlesFastFirstMulti(parsed, languages, videoContext = {}, config = {}) {
@@ -260,13 +296,11 @@ async function fetchSubtitlesFastFirstMulti(parsed, languages, videoContext = {}
         imdbId: parsed.imdbId,
         season: parsed.season,
         episode: parsed.episode,
-        language: languages[0], // Primary language for providers that need it
-        videoHash: videoContext.videoHash, // Include video context for providers that support it
+        language: languages[0],
+        videoHash: videoContext.videoHash,
         videoSize: videoContext.videoSize,
         filename: videoContext.filename,
-        // SubSource API key (if user has configured it)
         apiKey: config.subsourceApiKey || null,
-        // Encrypted API key for download URLs
         encryptedApiKey: encryptedApiKey
     };
 
@@ -274,79 +308,192 @@ async function fetchSubtitlesFastFirstMulti(parsed, languages, videoContext = {}
     const wyzieProvider = providerManager.get('wyzie');
     const otherProviders = enabledProviders.filter(p => p.name !== 'wyzie');
     
-    log('debug', `[Subtitles] Fetching from ${enabledProviders.length} providers: ${enabledProviders.map(p => p.name).join(', ')}`);
+    log('debug', `[FastFirst] Starting with ${enabledProviders.length} providers: ${enabledProviders.map(p => p.name).join(', ')}`);
     
-    // Build promises for all providers
-    const providerPromises = [];
-    const providerNames = [];
+    // Build provider entries: { name, promise }
+    const providers = [];
     
     // Wyzie uses fast-first if available
     if (wyzieProvider && wyzieProvider.enabled) {
+        let promise;
         if (wyzieProvider.searchFastFirstMulti) {
-            providerPromises.push(wyzieProvider.searchFastFirstMulti(query, languages));
-            providerNames.push('wyzie');
+            promise = wyzieProvider.searchFastFirstMulti(query, languages);
         } else if (wyzieProvider.searchFastFirst && languages.length > 0) {
-            providerPromises.push(wyzieProvider.searchFastFirst(query, languages[0], languages[1] || null));
-            providerNames.push('wyzie');
+            promise = wyzieProvider.searchFastFirst(query, languages[0], languages[1] || null);
         } else {
-            providerPromises.push(wyzieProvider.search(query));
-            providerNames.push('wyzie');
+            promise = wyzieProvider.search(query);
         }
+        providers.push({ name: 'wyzie', promise });
     }
     
-    // Other providers use regular search (e.g., BetaSeries)
+    // Other providers use regular search per language
     for (const provider of otherProviders) {
-        // Create language-specific queries for each requested language
         for (const lang of languages) {
             const langQuery = { ...query, language: lang };
-            providerPromises.push(provider.search(langQuery));
-            providerNames.push(`${provider.name}(${lang})`);
+            providers.push({ 
+                name: `${provider.name}(${lang})`, 
+                promise: provider.search(langQuery) 
+            });
         }
     }
     
-    if (providerPromises.length === 0) {
-        log('warn', '[Subtitles] No providers available');
+    if (providers.length === 0) {
+        log('warn', '[FastFirst] No providers available');
         return { subtitles: [], fromCache: false, backgroundPromise: null };
     }
     
-    // Execute all providers in parallel
+    // Calculate deadline once for all providers
     const startTime = Date.now();
-    const results = await Promise.allSettled(providerPromises);
-    const totalTime = Date.now() - startTime;
+    const deadline = startTime + FAST_FIRST_TIMEOUT_MS;
     
-    // Aggregate results
+    // Race all providers against the deadline in parallel
+    const raceResults = await Promise.all(
+        providers.map(p => raceProviderWithDeadline(p.promise, p.name, deadline))
+    );
+    
+    const elapsedTime = Date.now() - startTime;
+    
+    // Aggregate results and track timed-out providers
     let allSubtitles = [];
-    let backgroundPromise = null;
     const summary = [];
+    const timedOutProviders = [];
+    let wyzieBackgroundPromise = null;
     
-    results.forEach((result, index) => {
-        const providerName = providerNames[index];
-        
-        if (result.status === 'fulfilled') {
-            const value = result.value;
+    for (const result of raceResults) {
+        if (result.timedOut) {
+            summary.push(`${result.name}:TIMEOUT`);
+            timedOutProviders.push({ name: result.name, promise: result.promise });
+        } else if (result.error) {
+            summary.push(`${result.name}:ERR`);
+        } else if (result.result) {
+            const value = result.result;
             
             // Handle Wyzie's fast-first response format
             if (value && value.subtitles) {
                 allSubtitles.push(...value.subtitles);
-                summary.push(`${providerName}:${value.subtitles.length}`);
-                // Capture background promise if present
-                if (value.backgroundPromise && !backgroundPromise) {
-                    backgroundPromise = value.backgroundPromise;
+                summary.push(`${result.name}:${value.subtitles.length}`);
+                if (value.backgroundPromise && !wyzieBackgroundPromise) {
+                    wyzieBackgroundPromise = value.backgroundPromise;
                 }
             } else if (Array.isArray(value)) {
-                // Standard provider response
                 allSubtitles.push(...value);
-                summary.push(`${providerName}:${value.length}`);
+                summary.push(`${result.name}:${value.length}`);
             } else {
-                summary.push(`${providerName}:0`);
+                summary.push(`${result.name}:0`);
             }
         } else {
-            summary.push(`${providerName}:ERR`);
-            log('debug', `[Subtitles] ${providerName} failed: ${result.reason?.message || 'Unknown'}`);
+            summary.push(`${result.name}:0`);
         }
-    });
+    }
     
-    log('info', `[Subtitles] Multi-provider: ${allSubtitles.length} total in ${totalTime}ms (${summary.join(', ')})`);
+    log('info', `[FastFirst] Got ${allSubtitles.length} subs in ${elapsedTime}ms (${summary.join(', ')})`);
+    
+    // Create background promise for timed-out providers to cache their results
+    let backgroundPromise = null;
+    if (timedOutProviders.length > 0) {
+        backgroundPromise = (async () => {
+            const bgStartTime = Date.now();
+            log('debug', `[FastFirst] Background: waiting for ${timedOutProviders.length} timed-out providers...`);
+            
+            const bgResults = await Promise.allSettled(
+                timedOutProviders.map(p => p.promise)
+            );
+            
+            let bgSubtitles = [];
+            const bgSummary = [];
+            
+            bgResults.forEach((result, i) => {
+                const providerName = timedOutProviders[i].name;
+                if (result.status === 'fulfilled') {
+                    const value = result.value;
+                    if (value && value.subtitles) {
+                        bgSubtitles.push(...value.subtitles);
+                        bgSummary.push(`${providerName}:${value.subtitles.length}`);
+                    } else if (Array.isArray(value)) {
+                        bgSubtitles.push(...value);
+                        bgSummary.push(`${providerName}:${value.length}`);
+                    } else {
+                        bgSummary.push(`${providerName}:0`);
+                    }
+                } else {
+                    bgSummary.push(`${providerName}:ERR`);
+                }
+            });
+            
+            const bgElapsed = Date.now() - bgStartTime;
+            log('info', `[FastFirst] Background complete: ${bgSubtitles.length} subs in ${bgElapsed}ms (${bgSummary.join(', ')})`);
+            
+            // Cache the background results for next request
+            if (subtitleCache && bgSubtitles.length > 0) {
+                // Group by language and cache
+                const byLang = {};
+                for (const sub of bgSubtitles) {
+                    const lang = (sub.lang || sub.language || '').toLowerCase().substring(0, 2);
+                    if (!byLang[lang]) byLang[lang] = [];
+                    byLang[lang].push(sub);
+                }
+                
+                for (const [lang, subs] of Object.entries(byLang)) {
+                    const existingCache = subtitleCache.get(parsed.imdbId, parsed.season, parsed.episode, lang);
+                    if (existingCache) {
+                        // Merge with existing cache (dedup by URL)
+                        const existingUrls = new Set(existingCache.subtitles.map(s => s.url));
+                        const newSubs = subs.filter(s => !existingUrls.has(s.url));
+                        if (newSubs.length > 0) {
+                            const merged = [...existingCache.subtitles, ...newSubs];
+                            subtitleCache.set(parsed.imdbId, parsed.season, parsed.episode, lang, merged);
+                            log('debug', `[FastFirst] Background cached: ${newSubs.length} new ${lang} subs (${merged.length} total)`);
+                        }
+                    } else {
+                        subtitleCache.set(parsed.imdbId, parsed.season, parsed.episode, lang, subs);
+                        log('debug', `[FastFirst] Background cached: ${subs.length} ${lang} subs`);
+                    }
+                }
+            }
+            
+            return bgSubtitles;
+        })();
+    }
+    
+    // Wrap Wyzie's background promise to cache its results
+    if (wyzieBackgroundPromise) {
+        wyzieBackgroundPromise = wyzieBackgroundPromise.then(wyzieBgSubs => {
+            // Cache Wyzie's background results
+            if (subtitleCache && wyzieBgSubs && wyzieBgSubs.length > 0) {
+                const byLang = {};
+                for (const sub of wyzieBgSubs) {
+                    const lang = (sub.lang || sub.language || '').toLowerCase().substring(0, 2);
+                    if (!byLang[lang]) byLang[lang] = [];
+                    byLang[lang].push(sub);
+                }
+                
+                for (const [lang, subs] of Object.entries(byLang)) {
+                    const existingCache = subtitleCache.get(parsed.imdbId, parsed.season, parsed.episode, lang);
+                    if (existingCache) {
+                        const existingUrls = new Set(existingCache.subtitles.map(s => s.url));
+                        const newSubs = subs.filter(s => !existingUrls.has(s.url));
+                        if (newSubs.length > 0) {
+                            const merged = [...existingCache.subtitles, ...newSubs];
+                            subtitleCache.set(parsed.imdbId, parsed.season, parsed.episode, lang, merged);
+                            log('debug', `[FastFirst] Wyzie background cached: ${newSubs.length} new ${lang} subs (${merged.length} total)`);
+                        }
+                    } else {
+                        subtitleCache.set(parsed.imdbId, parsed.season, parsed.episode, lang, subs);
+                        log('debug', `[FastFirst] Wyzie background cached: ${subs.length} ${lang} subs`);
+                    }
+                }
+            }
+            return wyzieBgSubs || [];
+        });
+    }
+    
+    // Combine with Wyzie's background promise if present, flatten results
+    if (wyzieBackgroundPromise && backgroundPromise) {
+        backgroundPromise = Promise.all([wyzieBackgroundPromise, backgroundPromise])
+            .then(([wyzieSubs, timedOutSubs]) => [...(wyzieSubs || []), ...(timedOutSubs || [])]);
+    } else if (wyzieBackgroundPromise) {
+        backgroundPromise = wyzieBackgroundPromise;
+    }
     
     return { subtitles: allSubtitles, fromCache: false, backgroundPromise };
 }

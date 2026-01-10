@@ -169,6 +169,13 @@ class SubSourceProvider extends BaseProvider {
 
             let subtitles = result.data;
             
+            // Pre-filter to exclude clear episode mismatches
+            const beforeCount = subtitles.length;
+            subtitles = subtitles.filter(sub => this._shouldIncludeSubtitle(sub, query));
+            if (subtitles.length < beforeCount) {
+                log('debug', `[SubSource] Pre-filtered ${beforeCount - subtitles.length} episode mismatches (${subtitles.length} remaining)`);
+            }
+            
             // Convert to SubtitleResult format
             const results = subtitles.map(sub => this._toSubtitleResult(sub, query));
             
@@ -186,36 +193,81 @@ class SubSourceProvider extends BaseProvider {
     }
 
     /**
-     * Filter subtitles by episode number (for TV series)
-     * Episode info is in releaseInfo field
+     * Check if subtitle should be excluded based on clear episode mismatch
+     * @param {Object} sub - Subtitle object from API
+     * @param {Object} query - Search query with episode/season
+     * @returns {boolean} true if subtitle should be INCLUDED
      */
-    _filterByEpisode(subtitles, targetEpisode) {
-        const epNum = targetEpisode.toString().padStart(2, '0');
+    _shouldIncludeSubtitle(sub, query) {
+        if (!query.episode || !query.season) {
+            return true; // Movies or no episode specified - include all
+        }
         
-        const patterns = [
-            new RegExp(`[sS]\\d+[eE]${epNum}\\b`, 'i'),  // S01E07
-            new RegExp(`\\b${epNum}\\b`),                // bare episode number (less reliable)
-            new RegExp(`[eE]${epNum}\\b`, 'i'),          // E07
-            new RegExp(`x${epNum}\\b`, 'i'),             // 1x07
-            new RegExp(`\\.${epNum}\\.`, 'i'),           // .07.
-            new RegExp(`-${epNum}-`, 'i')                // -07-
-        ];
+        const releaseInfo = Array.isArray(sub.releaseInfo) 
+            ? sub.releaseInfo.join(' ') 
+            : (sub.releaseInfo || '');
         
-        return subtitles.filter(sub => {
-            const releaseInfo = Array.isArray(sub.releaseInfo) 
-                ? sub.releaseInfo.join(' ') 
-                : (sub.releaseInfo || '');
+        if (!releaseInfo) {
+            return true; // No release info - can't filter, include it
+        }
+        
+        const requestedEpisode = parseInt(query.episode, 10);
+        const requestedSeason = parseInt(query.season, 10);
+        
+        // Pattern 0: Episode RANGE like S01E01-E12 (episode pack)
+        // If requested episode falls within range, include it
+        const rangePattern = /[sS](\d{1,2})[.\-_]?[eE](\d{1,4})\-[eE]?(\d{1,4})/;
+        const rangeMatch = releaseInfo.match(rangePattern);
+        if (rangeMatch) {
+            const fileSeason = parseInt(rangeMatch[1], 10);
+            const startEp = parseInt(rangeMatch[2], 10);
+            const endEp = parseInt(rangeMatch[3], 10);
             
-            // Check season-episode pattern first (most reliable)
-            if (patterns[0].test(releaseInfo)) return true;
-            
-            // Check other patterns (less reliable, might get wrong episode)
-            for (let i = 2; i < patterns.length; i++) {
-                if (patterns[i].test(releaseInfo)) return true;
+            if (fileSeason !== requestedSeason) {
+                log('debug', `[SubSource] Excluding "${releaseInfo.substring(0, 50)}..." - S${fileSeason} != S${requestedSeason}`);
+                return false;
             }
             
+            // Check if requested episode falls within range
+            if (requestedEpisode >= startEp && requestedEpisode <= endEp) {
+                return true; // Episode is in range
+            }
+            log('debug', `[SubSource] Excluding "${releaseInfo.substring(0, 50)}..." - E${requestedEpisode} not in E${startEp}-E${endEp}`);
             return false;
-        });
+        }
+        
+        // Pattern 1: S01E13, S1E13, S01.E13 (most reliable - has both season and episode)
+        // Supports up to 4 digits for anime (e.g., One Piece E1050)
+        const fullPattern = /[sS](\d{1,2})[.\-_]?[eE](\d{1,4})(?!\d)/;
+        const fullMatch = releaseInfo.match(fullPattern);
+        if (fullMatch) {
+            const fileSeason = parseInt(fullMatch[1], 10);
+            const fileEpisode = parseInt(fullMatch[2], 10);
+            
+            // Only exclude if BOTH don't match (strict mismatch)
+            if (fileSeason !== requestedSeason || fileEpisode !== requestedEpisode) {
+                log('debug', `[SubSource] Excluding "${releaseInfo.substring(0, 50)}..." - S${fileSeason}E${fileEpisode} != S${requestedSeason}E${requestedEpisode}`);
+                return false;
+            }
+            return true; // Matches!
+        }
+        
+        // Pattern 2: Standalone episode like "E13", "Ep13", "EP.13", "E1050" (no season prefix)
+        // Only use when there's no "S##" in name
+        const hasSeason = /[sS](\d{1,2})(?![eE\d])/.test(releaseInfo);
+        if (!hasSeason) {
+            const epOnlyPattern = /[eE][pP]?\.?(\d{1,4})(?!\d)/;
+            const epMatch = releaseInfo.match(epOnlyPattern);
+            if (epMatch) {
+                const fileEpisode = parseInt(epMatch[1], 10);
+                if (fileEpisode !== requestedEpisode) {
+                    log('debug', `[SubSource] Excluding "${releaseInfo.substring(0, 50)}..." - E${fileEpisode} != E${requestedEpisode}`);
+                    return false;
+                }
+                return true;
+            }
+        }
+        return true;
     }
 
     /**

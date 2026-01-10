@@ -1149,8 +1149,30 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
         let entryFormat = 'srt';
         
         if (subtitleEntries.length === 1) {
-            // Single file - use it directly
-            selectedEntry = subtitleEntries[0];
+            // Single file - validate episode if pattern found in filename
+            const entry = subtitleEntries[0];
+            
+            if (episode) {
+                const episodePatternMatch = entry.name.match(
+                    /[sS]\d+[eE](\d{1,3})|[eE][pP]?(\d{1,3})(?!\d)|(?:^|[^\d])(\d{2,3})(?:[^\d]|$)/i
+                );
+                
+                if (episodePatternMatch) {
+                    const fileEpisode = parseInt(
+                        episodePatternMatch[1] || episodePatternMatch[2] || episodePatternMatch[3], 
+                        10
+                    );
+                    const requestedEpisode = parseInt(episode, 10);
+                    
+                    if (fileEpisode !== requestedEpisode) {
+                        log('warn', `[SubSource Proxy] Single file ${entry.name} is E${fileEpisode}, not E${requestedEpisode}`);
+                        return res.status(404).send(`Episode ${episode} not found - this file is for episode ${fileEpisode}`);
+                    }
+                }
+                // If no episode pattern found, serve the file anyway
+            }
+            
+            selectedEntry = entry;
         } else if (episode) {
             // Multiple files - try to match episode (and season if provided)
             const epNum = episode.toString().padStart(2, '0');
@@ -1162,7 +1184,7 @@ app.get('/api/subsource/proxy/:subtitleId', async (req, res) => {
             if (seNum) {
                 // Most specific: S01E07 with exact season
                 patterns.push(new RegExp(`[sS]${seNum}[eE]${epNum}\\b`, 'i'));
-                patterns.push(new RegExp(`[sS]0*${season}[eE]${epNum}\\b`, 'i')); // S1E07 variant
+                patterns.push(new RegExp(`[sS]0*${season}[eE]${epNum}\\b`, 'i'));
             }
             
             // Less specific patterns (fallback if no season match)

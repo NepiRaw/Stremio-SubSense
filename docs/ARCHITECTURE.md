@@ -424,17 +424,39 @@ Uses wyzie-lib to aggregate from multiple sources:
 - Uses Cinemeta for title lookup
 - Parses HTML pages for subtitle links
 
-### 7.2 Fast-First Strategy
+### 7.2 Fast-First Strategy with Timeout
+
+The Fast-First strategy ensures Stremio receives a response within 4 seconds to avoid being marked as "failed":
 
 ```javascript
-searchFastFirstMulti(query, languages) {
-  1. Query all sources in parallel for ALL requested languages
-  2. Collect subtitles as they arrive
-  3. Return immediately when minSubtitles threshold met
-  4. Continue background fetch for complete results
-  5. Cache complete results for future requests
+// Constant at top of subtitles.js
+const FAST_FIRST_TIMEOUT_MS = 4000;
+
+fetchSubtitlesFastFirstMulti(parsed, languages, videoContext, config) {
+  1. Calculate deadline: Date.now() + FAST_FIRST_TIMEOUT_MS
+  2. Build provider list (Wyzie, BetaSeries, SubSource, etc.)
+  3. Race ALL providers against the deadline in parallel
+  4. At timeout (or when all complete):
+     - Collect results from providers that finished
+     - Track timed-out providers
+  5. Sort ALL results by filename similarity
+  6. Return immediately to Stremio
+  7. Timed-out providers continue in background:
+     - When complete, merge with existing cache
+     - Results available on next request
 }
 ```
+
+**Example Log Output:**
+```
+[FastFirst] Starting with 3 providers: wyzie, betaseries, subsource
+[FastFirst] Got 45 subs in 4001ms (wyzie:42, betaseries(fr):TIMEOUT, subsource(fr):3)
+[FastFirst] Background: waiting for 1 timed-out providers...
+[FastFirst] Background complete: 8 subs in 18234ms (betaseries(fr):8)
+[FastFirst] Background cached: 8 fr subs
+```
+
+See [FAST_FIRST_SORTING_ARCHITECTURE_PLAN.md](FAST_FIRST_SORTING_ARCHITECTURE_PLAN.md) for full implementation details.
 
 ### 7.3 Dual Format (VTT + SRT)
 
