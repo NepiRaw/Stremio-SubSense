@@ -593,13 +593,24 @@ function initSubsourceApiKey() {
                 subsourceApiKey = '';
                 subsourceApiKeyValid = false;
                 updateSubsourceStatus('unconfigured', 'Enter an API key to enable SubSource');
+                setTestButtonBreathing(false);
                 updateSubsourceSourceVisibility();
             } else if (!subsourceApiKeyValid || key !== subsourceApiKey) {
                 subsourceApiKeyValid = false;
-                updateSubsourceStatus('unconfigured', 'Click Test to validate your API key');
+                updateSubsourceStatus('pending', 'Click Test to validate your API key');
+                setTestButtonBreathing(true);
                 updateSubsourceSourceVisibility();
             }
         });
+    }
+}
+
+function setTestButtonBreathing(enabled) {
+    if (!testSubsourceKeyBtn) return;
+    if (enabled) {
+        testSubsourceKeyBtn.classList.add('breathing');
+    } else {
+        testSubsourceKeyBtn.classList.remove('breathing');
     }
 }
 
@@ -607,6 +618,7 @@ async function validateSubsourceApiKey(apiKey, silent = false) {
     if (!silent) {
         updateSubsourceStatus('testing', 'Validating API key...');
         if (testSubsourceKeyBtn) testSubsourceKeyBtn.disabled = true;
+        setTestButtonBreathing(false);
     }
     
     try {
