@@ -192,8 +192,8 @@ async function sortByFilenameSimilarityAsync(subtitles, videoFilename, contentTy
     if (!videoParsed) return subtitles;
     
     const scored = subtitles.map((sub, originalIndex) => {
-        const releaseName = sub.releaseInfo || sub.releaseName || sub.release || sub.id || sub.SubFileName || '';
-        const subtitleParsed = parseFilename(releaseName, isTv);
+        const matchString = sub.fileName || sub.releaseInfo || sub.releaseName || sub.release || sub.id || sub.SubFileName || '';
+        const subtitleParsed = parseFilename(matchString, isTv);
         const score = subtitleParsed ? calculateParsedSimilarity(videoParsed, subtitleParsed, contentType) : 0;
         return { subtitle: sub, score, originalIndex };
     });
@@ -216,8 +216,8 @@ function sortByFilenameSimilarity(subtitles, videoFilename, contentType = 'serie
     if (!videoParsed) return subtitles;
     
     const scored = subtitles.map((sub, originalIndex) => {
-        const releaseName = sub.releaseInfo || sub.releaseName || sub.release || sub.id || sub.SubFileName || '';
-        const subtitleParsed = filenameParse ? parseFilename(releaseName, isTv) : parseFilenameSync(releaseName);
+        const matchString = sub.fileName || sub.releaseInfo || sub.releaseName || sub.release || sub.id || sub.SubFileName || '';
+        const subtitleParsed = filenameParse ? parseFilename(matchString, isTv) : parseFilenameSync(matchString);
         const score = subtitleParsed ? calculateParsedSimilarity(videoParsed, subtitleParsed, contentType) : 0;
         return { subtitle: sub, score, originalIndex };
     });

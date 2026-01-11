@@ -163,6 +163,7 @@ class SubtitleResult {
         source,          // Source name (e.g., 'opensubtitles', 'subdl')
         provider,        // Provider name (e.g., 'wyzie')
         releaseName = '',
+        fileName = null, // Original subtitle filename
         hearingImpaired = false,
         rating = null,
         downloadCount = null,
@@ -179,6 +180,7 @@ class SubtitleResult {
         this.source = source;
         this.provider = provider;
         this.releaseName = releaseName;
+        this.fileName = fileName;
         this.hearingImpaired = hearingImpaired;
         this.rating = rating;
         this.downloadCount = downloadCount;

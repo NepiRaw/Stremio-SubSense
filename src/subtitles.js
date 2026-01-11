@@ -100,7 +100,7 @@ async function handleSubtitles(args, config) {
             
             if (cachedSubtitles.length > 0) {
                 // Regenerate SubSource URLs with current user's encrypted API key
-                rawSubtitles = regenerateSubsourceUrls(cachedSubtitles, config, parsed.episode);
+                rawSubtitles = regenerateSubsourceUrls(cachedSubtitles, config, parsed.season, parsed.episode);
                 cacheHit = true;
                 log('info', `[Subtitles] Cache HIT: ${rawSubtitles.length} subtitles for ${wyzieLanguages.join(', ')}`);
                 
@@ -813,7 +813,7 @@ function cacheSubtitlesByLanguage(parsed, subtitles) {
  * @param {number|null} episode - Episode number for TV series
  * @returns {Array} Subtitles with regenerated SubSource URLs
  */
-function regenerateSubsourceUrls(subtitles, config, episode = null) {
+function regenerateSubsourceUrls(subtitles, config, season = null, episode = null) {
     if (!config.subsourceApiKey || !encryptConfig) {
         return subtitles; // No API key or encryption not available
     }
@@ -834,24 +834,38 @@ function regenerateSubsourceUrls(subtitles, config, episode = null) {
             return sub;
         }
         
-        // Extract subtitle ID from existing URL
-        const match = sub.url?.match(/\/api\/subsource\/proxy\/(\d+)/);
+        // Extract subtitle ID and releaseName from existing URL
+        // Pattern: /api/subsource/proxy/:subtitleId/:releaseName?params
+        // or: /api/subsource/proxy/:subtitleId?params (if releaseName missing)
+        const match = sub.url?.match(/\/api\/subsource\/proxy\/(\d+)(?:\/([^?]+))?/);
         if (!match) {
             return sub;
         }
         
         const subtitleId = match[1];
         
-        // Build new URL with encrypted API key
+        let releaseName = match[2] 
+            ? decodeURIComponent(match[2]) 
+            : (sub.releaseName || sub.title || 'subtitle');
+        
+        const sanitizedRelease = releaseName
+            .replace(/[^a-zA-Z0-9._-]/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_|_$/g, '')
+            .substring(0, 100) || 'subtitle';
+        
         const params = new URLSearchParams();
         params.set('key', encryptedApiKey);
+        if (season) {
+            params.set('season', season.toString());
+        }
         if (episode) {
             params.set('episode', episode.toString());
         }
         
         return {
             ...sub,
-            url: `${baseUrl}/api/subsource/proxy/${subtitleId}?${params.toString()}`
+            url: `${baseUrl}/api/subsource/proxy/${subtitleId}/${encodeURIComponent(sanitizedRelease)}?${params.toString()}`
         };
     });
 }

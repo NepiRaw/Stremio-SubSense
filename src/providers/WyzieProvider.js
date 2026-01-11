@@ -533,9 +533,28 @@ class WyzieProvider extends BaseProvider {
         try {
             const results = await searchSubtitles(params);
             const subtitles = Array.isArray(results) ? results : [];
-            return subtitles.map(sub => this._normalizeResult(sub));
+            
+            // Filter out subtitle formats: PGS, SUP, IDX, VOB
+            const filtered = subtitles.filter(sub => {
+                if (!sub.url) return true;
+                
+                const formatMatch = sub.url.match(/[?&]format=([^&]+)/i);
+                if (formatMatch) {
+                    const format = formatMatch[1].toLowerCase();
+                    if (['pgs', 'sup', 'idx', 'vobsub', 'sub/idx'].includes(format)) {
+                        log('debug', `[WyzieProvider] Filtering out ${format} subtitle from ${source}`);
+                        return false;
+                    }
+                }
+                return true;
+            });
+            
+            if (filtered.length < subtitles.length) {
+                log('debug', `[WyzieProvider] Filtered out ${subtitles.length - filtered.length} PGS/binary subs from ${source}`);
+            }
+            
+            return filtered.map(sub => this._normalizeResult(sub));
         } catch (error) {
-            // Handle specific HTTP errors more gracefully
             const errorMsg = error.message || '';
             if (errorMsg.includes('status: 400') || errorMsg.includes('400')) {
                 log('debug', `[WyzieProvider] Source ${source}${language ? ` (${language})` : ''}: No subtitles found`);
@@ -560,7 +579,6 @@ class WyzieProvider extends BaseProvider {
         state.sourcesCompleted++;
         
         for (const sub of subtitles) {
-            // Deduplicate by URL
             if (state.seenUrls.has(sub.url)) {
                 continue;
             }
@@ -718,6 +736,9 @@ class WyzieProvider extends BaseProvider {
         // Detect format from URL (Wyzie-specific: uses format=xxx parameter)
         const formatInfo = this._detectFormatFromUrl(sub.url);
 
+        const rawFileName = sub.fileName || null;
+        const fileName = this._isUsefulFileName(rawFileName) ? rawFileName : null;
+
         return new SubtitleResult({
             id: sub.id || `wyzie-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             url: sub.url,
@@ -726,6 +747,7 @@ class WyzieProvider extends BaseProvider {
             source: source,
             provider: this.name,
             releaseName: sub.releaseName || sub.release || sub.media || '',
+            fileName: fileName,
             hearingImpaired: sub.hearingImpaired || sub.isHearingImpaired || sub.hi || false,
             rating: sub.rating || null,
             downloadCount: sub.downloads || null,
@@ -735,6 +757,33 @@ class WyzieProvider extends BaseProvider {
             format: formatInfo.format,
             needsConversion: formatInfo.needsConversion
         });
+    }
+
+    /**
+     * Check if a fileName is useful for matching (not GUID, not too short, contains release info)
+     * @private
+     * @param {string|null} fileName - The filename to check
+     * @returns {boolean}
+     */
+    _isUsefulFileName(fileName) {
+        if (!fileName || typeof fileName !== 'string') return false;
+        
+        // Reject GUIDs (e.g., "69cf7d79-052c-4f12-a57d-995d77de43ad")
+        if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(fileName)) {
+            return false;
+        }
+        
+        if (fileName.length < 10) return false;
+        
+        // Require release-like patterns
+        const hasReleasePattern = /[\.\-_]/.test(fileName) && (
+            /\.(srt|ass|ssa|sub|vtt)$/i.test(fileName) ||  // Has subtitle extension
+            /s\d{1,2}e\d{1,2}/i.test(fileName) ||           // Has S01E01 pattern
+            /\d{3,4}p/i.test(fileName) ||                    // Has resolution
+            /x26[45]|hevc|avc/i.test(fileName)               // Has codec
+        );
+        
+        return hasReleasePattern;
     }
 
     /**
