@@ -49,6 +49,10 @@ function generateManifest(config = {}) {
         behaviorHints: {
             configurable: true,
             configurationRequired: true
+        },
+        stremioAddonsConfig: {
+            issuer: "https://stremio-addons.net",
+            signature: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..pmX6-Us-_CaFGZCKNO38jQ.wTEgzMJqpu2e3qWqu6owfUHpEkc0lhIFMVoD8kRD8CH5T5SPU-_T4H4KsWFFTbjjkJ6EqMPxVgOm5P5rzaAo5J6Pn1G39uqjq9tBldlPB35twNcZo0Kd4N5CRS56dvX1.C3YXad-rIEz7ZvMW9PZPnQ"
         }
     };
 }
