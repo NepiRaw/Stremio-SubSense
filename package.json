@@ -22,7 +22,6 @@
     "@libsql/client": "^0.17.0",
     "adm-zip": "^0.5.16",
     "ass-compiler": "^0.1.16",
-    "better-sqlite3": "^12.5.0",
     "chardet": "^2.1.1",
     "cheerio": "^1.1.2",
     "dotenv": "^16.3.1",
