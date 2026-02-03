@@ -5,7 +5,6 @@
 <p>
   <img src="https://img.shields.io/github/v/release/nepiraw/Stremio-SubSense" alt="Version" />
   <img src="https://img.shields.io/badge/Stremio-Addon-purple" alt="Stremio" />
-  <img src="https://img.shields.io/badge/Node.js-18+-brightgreen" alt="Node.js" />
 </p>
 
 </div>
@@ -22,7 +21,7 @@
 - 🌍 **Multi-language support** — Select up to 5 subtitle languages with equal priority
 - ⚡ **Fast-first strategy** — Returns results as soon as fastest provider responds
 - 🎨 **Easy configuration** — Simple web-based configuration interface
-- 🗄️ **Smart caching** — SQLite-based caching for faster subsequent requests
+- 🗄️ **Smart caching** — SQL caching for faster subsequent requests
 - 🔐 **Secure API keys** — Encrypted storage of provider API keys in manifest URLs
 
 ## 📋 Table of Contents

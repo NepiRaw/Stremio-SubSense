@@ -41,7 +41,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 | Web Framework | Express.js |
 | Stremio SDK | stremio-addon-sdk |
 | Subtitle Sources | wyzie-lib |
-| Database | SQLite (better-sqlite3) |
+| Database | SQLite (LibSQL via @libsql/client) |
 | Process Manager | PM2 |
 | Frontend | Vanilla HTML/CSS/JS |
 
@@ -122,6 +122,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 | `BaseProvider.js` | Abstract base class for providers |
 | `WyzieProvider.js` | wyzie-lib integration, fast-first strategy |
 | `BetaSeriesProvider.js` | BetaSeries API integration for French/English subtitles |
+| `SubSourceProvider.js` | SubSource.net API integration (user API key required) |
 | `YIFYProvider.js` | YIFY/YTS subtitle provider (movies only) |
 | `TVsubtitlesProvider.js` | TVsubtitles.net provider (TV series only) |
 | `ProviderManager.js` | Provider registry and orchestration |
@@ -131,6 +132,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 
 | File | Purpose |
 |------|---------|
+| `database-libsql.js` | LibSQL database connection singleton (async API) |
 | `subtitle-cache.js` | Subtitle result caching by content+language |
 | `stats-db.js` | SQLite database for analytics and request logs |
 | `cache-cleaner.js` | Automatic cleanup of old entries |
@@ -147,6 +149,9 @@ This document provides a complete technical overview of the SubSense Stremio add
 | File | Purpose |
 |------|---------|
 | `validators.js` | Input validation (IMDB IDs, pagination) |
+| `crypto.js` | AES-256-GCM encryption for user API keys |
+| `encoding.js` | Character encoding detection and conversion |
+| `filenameMatcher.js` | Subtitle-to-video filename matching logic |
 
 ---
 
@@ -507,12 +512,14 @@ formatForStremio(subtitles) {
 
 ## 8. Caching System
 
+All database operations use LibSQL (@libsql/client) with async/await for non-blocking I/O.
+
 ### 8.1 Subtitle Cache
 
 Located in `src/cache/subtitle-cache.js`
 
 **Features**:
-- In-memory cache with SQLite persistence
+- In-memory cache with SQLite persistence (async LibSQL)
 - Keyed by: imdbId + season + episode + language
 - TTL: 24 hours default, background refresh when stale
 - Caches ALL languages fetched (benefits future users)
@@ -526,6 +533,11 @@ Located in `src/cache/subtitle-cache.js`
 
 Located in `src/cache/stats-db.js`
 
+**Features**:
+- Async LibSQL database for analytics
+- Uses pre-computed summary tables for performance with millions of entries
+- Smart skip optimization avoids recomputation when data unchanged
+
 **Tables**:
 - `subtitle_cache` - Cached subtitle entries
 - `request_log` - All subtitle requests
@@ -533,6 +545,7 @@ Located in `src/cache/stats-db.js`
 - `provider_stats` - Per-provider performance
 - `language_stats` - Language availability
 - `user_sessions` - Active session tracking
+- `cache_summary` - Pre-computed stats for fast queries
 
 ### 8.3 Cache Cleaner
 
@@ -728,12 +741,14 @@ Example: subsense-0-2607183-vtt-subsource
 | `PORT` | 3100 | Server port |
 | `SUBSENSE_BASE_URL` | `http://127.0.0.1:{PORT}` | Public URL for proxied subtitles |
 | `LOG_LEVEL` | info | Logging: debug, info, warn, error |
-| `SUBTITLE_SOURCES` | All sources | Comma-separated source list |
+| `SUBSENSE_ENCRYPTION_KEY` | — | **Required** for SubSource. Encryption key for user API keys |
+| `SUBTITLE_SOURCES` | All sources | Comma-separated provider list (wyzie, betaseries, yify, tvsubtitles, subsource) |
+| `WYZIE_SOURCES` | All sources | Comma-separated Wyzie sources (OpenSubtitles, Subdl, Subf2m, Podnapisi, AnimeTosho, Gestdown) |
+| `BETASERIES_API_KEY` | — | BetaSeries API key for French/English subtitles |
 | `ENABLE_CACHE` | true | Enable/disable caching |
 | `DB_PATH` | ./data/subsense.db | SQLite database path |
 | `CACHE_RETENTION_DAYS` | 30 | Days before cache cleanup |
 | `MAX_SUBTITLES` | 30 | Fallback max (overridden by user config) |
-| `BETASERIES_API_KEY` | *(required)* | BetaSeries API key for provider |
 
 ---
 
@@ -753,6 +768,17 @@ Stremio-SubSense/
 │   ├── content.html                # Cache browser
 │   ├── style.css                   # Shared styles
 │   ├── logo.png                    # Addon logo
+│   ├── providers/                  # Provider icons (self-hosted)
+│   │   ├── animetosho.ico
+│   │   ├── betaseries.ico
+│   │   ├── gestdown.png
+│   │   ├── opensubtitles.ico
+│   │   ├── podnapisi.ico
+│   │   ├── subdl.png
+│   │   ├── subf2m.png
+│   │   ├── subsource.png
+│   │   ├── tvsubtitles.ico
+│   │   └── yify.ico
 │   └── js/
 │       ├── configure.js            # Configure page logic
 │       ├── stats.js                # Stats dashboard logic
@@ -770,12 +796,14 @@ Stremio-SubSense/
 │   │   ├── BaseProvider.js         # Abstract base class
 │   │   ├── WyzieProvider.js        # wyzie-lib integration
 │   │   ├── BetaSeriesProvider.js   # BetaSeries API (FR/EN)
+│   │   ├── SubSourceProvider.js    # SubSource.net API
 │   │   ├── YIFYProvider.js         # YIFY/YTS (movies only)
 │   │   ├── TVsubtitlesProvider.js  # TVsubtitles.net (series only)
 │   │   └── ProviderManager.js
 │   │
 │   ├── cache/
 │   │   ├── index.js                # Cache exports
+│   │   ├── database-libsql.js      # LibSQL connection singleton
 │   │   ├── subtitle-cache.js
 │   │   ├── stats-db.js             # SQLite analytics
 │   │   └── cache-cleaner.js
@@ -784,7 +812,10 @@ Stremio-SubSense/
 │   │   └── subtitle-converter.js  # ASS→VTT/SRT conversion with styling
 │   │
 │   └── utils/
-│       └── validators.js    # Input validation
+│       ├── validators.js           # Input validation
+│       ├── crypto.js               # API key encryption
+│       ├── encoding.js             # Character encoding
+│       └── filenameMatcher.js      # Subtitle-video matching
 ```
 
 ---
