@@ -7,7 +7,7 @@ const { log } = require('../utils');
 
 const CLEANUP_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 const LOG_RETENTION_DAYS = 30;
-const CACHE_RETENTION_DAYS = parseInt(process.env.CACHE_RETENTION_DAYS, 10) || 90;
+const CACHE_RETENTION_DAYS = parseInt(process.env.CACHE_RETENTION_DAYS, 10) || 14;
 const SESSION_RETENTION_DAYS = 60;
 
 /**

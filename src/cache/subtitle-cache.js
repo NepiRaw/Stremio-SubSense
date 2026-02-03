@@ -5,7 +5,7 @@
 const db = require('./database-libsql');
 const { log } = require('../utils');
 
-const REFRESH_INTERVAL = parseInt(process.env.CACHE_REFRESH_INTERVAL || '86400');
+const REFRESH_INTERVAL = parseInt(process.env.CACHE_REFRESH_INTERVAL || '604800');
 
 class SubtitleCacheAsync {
     /**

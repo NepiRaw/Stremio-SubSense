@@ -195,27 +195,50 @@ class WyzieProvider extends BaseProvider {
         );
 
         // Fast-first promise: resolves when threshold is met
+        let checkInterval = null;
+        const MAX_INTERVAL_TIMEOUT = 30000; // Force cleanup after 30 seconds max
+        
         const fastResultPromise = new Promise((resolve) => {
             const checkThreshold = () => {
                 if (!state.resolved && state.primarySubtitles.length >= this.minSubtitles) {
                     state.resolved = true;
                     const fetchTimeMs = Date.now() - startTime;
                     log('info', `[WyzieProvider] Fast-first: returning ${state.primarySubtitles.length} primary subs in ${fetchTimeMs}ms (threshold met)`);
+                    if (checkInterval) {
+                        clearInterval(checkInterval);
+                        checkInterval = null;
+                    }
                     resolve(state.primarySubtitles.slice(0, this.minSubtitles * 20));
                 }
             };
 
-            const checkInterval = setInterval(() => {
+            checkInterval = setInterval(() => {
                 checkThreshold();
-                if (state.resolved || state.sourcesCompleted >= state.totalSources) {
-                    clearInterval(checkInterval);
+                const elapsed = Date.now() - startTime;
+                if (state.resolved || state.sourcesCompleted >= state.totalSources || elapsed > MAX_INTERVAL_TIMEOUT) {
+                    if (checkInterval) {
+                        clearInterval(checkInterval);
+                        checkInterval = null;
+                    }
+                    if (elapsed > MAX_INTERVAL_TIMEOUT && !state.resolved) {
+                        log('warn', `[WyzieProvider] Fast-first: interval timeout after ${elapsed}ms, forcing cleanup`);
+                        state.resolved = true;
+                        resolve(state.primarySubtitles);
+                    }
                 }
             }, 50);
 
             state.checkThreshold = checkThreshold;
+            state._checkInterval = () => {
+                if (checkInterval) {
+                    clearInterval(checkInterval);
+                    checkInterval = null;
+                }
+            };
         });
 
         const primaryDonePromise = Promise.allSettled(sourcePromises).then(() => {
+            if (state._checkInterval) state._checkInterval();
             if (!state.resolved) {
                 state.resolved = true;
                 const fetchTimeMs = Date.now() - startTime;
@@ -351,10 +374,13 @@ class WyzieProvider extends BaseProvider {
         );
 
         // Fast-first promise: resolves when all languages have at least some results or any has hit threshold
+        let checkInterval = null;
+        const MAX_INTERVAL_TIMEOUT = 30000; // Force cleanup after 30 seconds max
+        
         const fastResultPromise = new Promise((resolve) => {
             const checkThreshold = () => {
-                if (!state.resolved) {
-                    // Check if all preferred languages have at least 1 subtitle each
+                    if (!state.resolved) {
+                        // Check if all preferred languages have at least 1 subtitle each
                     let allLanguagesHaveResults = true;
                     let anyLanguageHitThreshold = false;
                     let totalFromPreferred = 0;
@@ -379,6 +405,10 @@ class WyzieProvider extends BaseProvider {
                         const fetchTimeMs = Date.now() - startTime;
                         const langCounts = languages.map(l => `${l}:${(state.byLanguage[l.toLowerCase()] || []).length}`).join(', ');
                         log('info', `[WyzieProvider] Multi-lang fast-first: all languages have results (${langCounts}) in ${fetchTimeMs}ms`);
+                        if (checkInterval) {
+                            clearInterval(checkInterval);
+                            checkInterval = null;
+                        }
                         resolve(state.allSubtitles);
                         return;
                     }
@@ -389,23 +419,44 @@ class WyzieProvider extends BaseProvider {
                         const fetchTimeMs = Date.now() - startTime;
                         const langCounts = languages.map(l => `${l}:${(state.byLanguage[l.toLowerCase()] || []).length}`).join(', ');
                         log('info', `[WyzieProvider] Multi-lang fast-first: timeout with partial results (${langCounts}) in ${fetchTimeMs}ms`);
+                        if (checkInterval) {
+                            clearInterval(checkInterval);
+                            checkInterval = null;
+                        }
                         resolve(state.allSubtitles);
                         return;
                     }
                 }
             };
 
-            const checkInterval = setInterval(() => {
+            checkInterval = setInterval(() => {
                 checkThreshold();
-                if (state.resolved || state.sourcesCompleted >= state.totalSources) {
-                    clearInterval(checkInterval);
+                // Add timeout check to prevent infinite intervals
+                const elapsed = Date.now() - startTime;
+                if (state.resolved || state.sourcesCompleted >= state.totalSources || elapsed > MAX_INTERVAL_TIMEOUT) {
+                    if (checkInterval) {
+                        clearInterval(checkInterval);
+                        checkInterval = null;
+                    }
+                    if (elapsed > MAX_INTERVAL_TIMEOUT && !state.resolved) {
+                        log('warn', `[WyzieProvider] Multi-lang: interval timeout after ${elapsed}ms, forcing cleanup`);
+                        state.resolved = true;
+                        resolve(state.allSubtitles);
+                    }
                 }
             }, 50);
 
             state.checkThreshold = checkThreshold;
+            state._checkInterval = () => {
+                if (checkInterval) {
+                    clearInterval(checkInterval);
+                    checkInterval = null;
+                }
+            };
         });
 
         const allDonePromise = Promise.allSettled(allLanguagePromises).then(() => {
+            if (state._checkInterval) state._checkInterval();
             if (!state.resolved) {
                 state.resolved = true;
                 const fetchTimeMs = Date.now() - startTime;
