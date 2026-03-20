@@ -135,13 +135,14 @@ function calculateParsedSimilarity(videoParsed, subtitleParsed, contentType = 's
         }
     }
     
-    // Title match (penalize different shows)
+    // Title match (penalize different shows/movies)
     if (videoParsed.title && subtitleParsed.title) {
         const vTitle = videoParsed.title.toLowerCase().replace(/[^a-z0-9]/g, '');
         const sTitle = subtitleParsed.title.toLowerCase().replace(/[^a-z0-9]/g, '');
         if (vTitle === sTitle) {
             score += 5;
         } else if (vTitle && sTitle && !vTitle.includes(sTitle) && !sTitle.includes(vTitle)) {
+            if (contentType === 'movie') return -1;
             score -= 50;
         }
     }
@@ -178,6 +179,11 @@ function calculateParsedSimilarity(videoParsed, subtitleParsed, contentType = 's
     return Math.max(0, score);
 }
 
+// Minimum filename match score to be considered meaningful.
+// Below this threshold, filename matching is not useful and
+// downloadCount becomes the primary sort signal
+const MIN_FILENAME_SCORE = 10;
+
 /** Sort subtitles by filename similarity (async - uses full parser) */
 async function sortByFilenameSimilarityAsync(subtitles, videoFilename, contentType = 'series') {
     if (!Array.isArray(subtitles) || subtitles.length === 0) return subtitles;
@@ -191,13 +197,42 @@ async function sortByFilenameSimilarityAsync(subtitles, videoFilename, contentTy
     if (!videoParsed) return subtitles;
     
     const scored = subtitles.map((sub, originalIndex) => {
-        const matchString = sub.fileName || sub.releaseInfo || sub.releaseName || sub.release || sub.id || sub.SubFileName || '';
-        const subtitleParsed = parseFilename(matchString, isTv);
-        const score = subtitleParsed ? calculateParsedSimilarity(videoParsed, subtitleParsed, contentType) : 0;
+        const candidates = [
+            sub.fileName,
+            sub.releaseName,
+            ...(sub.releases || [])
+        ].filter(c => c && typeof c === 'string' && c.length > 0);
+
+        let score = 0;
+        if (candidates.length > 0) {
+            const scores = candidates.map(c => {
+                const parsed = parseFilename(c, isTv);
+                return parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
+            });
+            score = Math.max(...scores);
+        } else {
+            const matchString = sub.releaseInfo || sub.release || sub.id || sub.SubFileName || '';
+            const parsed = parseFilename(matchString, isTv);
+            score = parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
+        }
+
         return { subtitle: sub, score, originalIndex };
     });
     
-    scored.sort((a, b) => (b.score - a.score) || (a.originalIndex - b.originalIndex));
+    scored.sort((a, b) => {
+        // 3-tier scoring: >=MIN → real match, 0..MIN → no match (DL fallback), <0 → wrong content (last)
+        const scoreA = a.score < 0 ? -1 : (a.score >= MIN_FILENAME_SCORE ? a.score : 0);
+        const scoreB = b.score < 0 ? -1 : (b.score >= MIN_FILENAME_SCORE ? b.score : 0);
+
+        // Primary: filename similarity score (with threshold applied)
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        // Secondary: download count as tiebreaker (higher = better)
+        const dlA = a.subtitle.downloadCount || 0;
+        const dlB = b.subtitle.downloadCount || 0;
+        if (dlA !== dlB) return dlB - dlA;
+        // Tertiary: preserve original quality-sorted order
+        return a.originalIndex - b.originalIndex;
+    });
     
     const elapsed = Date.now() - startTime;
     log('debug', `[Filename Matching] Sorted ${subtitles.length} subs in ${elapsed}ms`);
@@ -214,14 +249,40 @@ function sortByFilenameSimilarity(subtitles, videoFilename, contentType = 'serie
     const videoParsed = filenameParse ? parseFilename(videoFilename, isTv) : parseFilenameSync(videoFilename);
     if (!videoParsed) return subtitles;
     
+    const parseFn = filenameParse ? parseFilename : parseFilenameSync;
+    
     const scored = subtitles.map((sub, originalIndex) => {
-        const matchString = sub.fileName || sub.releaseInfo || sub.releaseName || sub.release || sub.id || sub.SubFileName || '';
-        const subtitleParsed = filenameParse ? parseFilename(matchString, isTv) : parseFilenameSync(matchString);
-        const score = subtitleParsed ? calculateParsedSimilarity(videoParsed, subtitleParsed, contentType) : 0;
+        const candidates = [
+            sub.fileName,
+            sub.releaseName,
+            ...(sub.releases || [])
+        ].filter(c => c && typeof c === 'string' && c.length > 0);
+
+        let score = 0;
+        if (candidates.length > 0) {
+            const scores = candidates.map(c => {
+                const parsed = parseFn(c, isTv);
+                return parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
+            });
+            score = Math.max(...scores);
+        } else {
+            const matchString = sub.releaseInfo || sub.release || sub.id || sub.SubFileName || '';
+            const parsed = parseFn(matchString, isTv);
+            score = parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
+        }
+
         return { subtitle: sub, score, originalIndex };
     });
     
-    scored.sort((a, b) => (b.score - a.score) || (a.originalIndex - b.originalIndex));
+    scored.sort((a, b) => {
+        const scoreA = a.score < 0 ? -1 : (a.score >= MIN_FILENAME_SCORE ? a.score : 0);
+        const scoreB = b.score < 0 ? -1 : (b.score >= MIN_FILENAME_SCORE ? b.score : 0);
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        const dlA = a.subtitle.downloadCount || 0;
+        const dlB = b.subtitle.downloadCount || 0;
+        if (dlA !== dlB) return dlB - dlA;
+        return a.originalIndex - b.originalIndex;
+    });
     return scored.map(s => s.subtitle);
 }
 

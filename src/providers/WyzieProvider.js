@@ -928,9 +928,10 @@ class WyzieProvider extends BaseProvider {
             provider: this.name,
             releaseName: sub.releaseName || sub.release || sub.media || '',
             fileName: fileName,
+            releases: Array.isArray(sub.releases) ? sub.releases.filter(r => r && r.length > 0) : [],
             hearingImpaired: sub.hearingImpaired || sub.isHearingImpaired || sub.hi || false,
             rating: sub.rating || null,
-            downloadCount: sub.downloads || null,
+            downloadCount: sub.downloadCount ?? null,
             display: sub.display || '',
             
             // Format hints from URL analysis

@@ -16,6 +16,37 @@ try {
 
 const MAX_SUBTITLES = parseInt(process.env.MAX_SUBTITLES, 10) || 30;
 
+// --- Download Count & Rating Normalization ---
+
+/**
+ * Normalize download count to 0–1 range using log scale.
+ * Returns 0 if no download count is available
+ */
+function normalizeDownloadCount(sub) {
+    const count = sub.downloadCount;
+    if (count == null || count <= 0) return 0;
+    return Math.min(1, Math.log10(count) / 4);
+}
+
+/**
+ * Normalize rating to 0–1 range.
+ * Different providers use different scales — normalize per provider.
+ * Returns 0 if no rating available.
+ */
+function normalizeRating(sub) {
+    const rating = sub.rating;
+    if (rating == null || rating <= 0) return 0;
+
+    if (sub.provider === 'betaseries') {
+        return Math.min(1, rating / 10); // BetaSeries quality: 0–10
+    }
+    if (sub.provider === 'yify') {
+        return Math.min(1, Math.log10(rating + 1) / 2); // YIFY upvotes: log scale
+    }
+    // Generic fallback
+    return Math.min(1, rating / 100);
+}
+
 // Cache modules
 const ENABLE_CACHE = process.env.ENABLE_CACHE !== 'false';
 let subtitleCache = null;
@@ -555,13 +586,19 @@ function prioritizeSubtitlesMulti(subtitles, languages, maxSubtitles = 0) {
         }
     }
 
-    // Sort within each group by quality indicators
+    // Sort within each group by metadata-driven quality indicators
     const sortByQuality = (a, b) => {
-        // Prefer non-hearing-impaired
-        const hiA = a.hearingImpaired || a.isHearingImpaired || a.hi || false;
-        const hiB = b.hearingImpaired || b.isHearingImpaired || b.hi || false;
-        if (hiA !== hiB) return hiA ? 1 : -1;
-        return 0;
+        // 1. Prefer higher download count (normalized 0–1, log scale)
+        const dlA = normalizeDownloadCount(a);
+        const dlB = normalizeDownloadCount(b);
+        if (dlA !== dlB) return dlB - dlA;
+
+        // 2. Prefer higher rating (normalized 0–1, provider-specific)
+        const rA = normalizeRating(a);
+        const rB = normalizeRating(b);
+        if (rA !== rB) return rB - rA;
+
+        return 0; // Equal → preserve original order (stable sort)
     };
 
     // Sort each language group

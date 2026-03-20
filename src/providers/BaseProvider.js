@@ -152,6 +152,7 @@ class SubtitleResult {
         provider,        // Provider name (e.g., 'wyzie')
         releaseName = '',
         fileName = null, // Original subtitle filename
+        releases = [],   // All release names for multi-candidate matching (Wyzie releases[])
         hearingImpaired = false,
         rating = null,
         downloadCount = null,
@@ -169,6 +170,7 @@ class SubtitleResult {
         this.provider = provider;
         this.releaseName = releaseName;
         this.fileName = fileName;
+        this.releases = releases;
         this.hearingImpaired = hearingImpaired;
         this.rating = rating;
         this.downloadCount = downloadCount;
