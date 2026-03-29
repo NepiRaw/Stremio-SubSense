@@ -46,6 +46,20 @@ const stats = {
 
 const HISTORY_LIMIT = 100;
 
+function areStatsWritesEnabled() {
+    const rawInterval = process.env.STATS_REFRESH_INTERVAL;
+    if (rawInterval === undefined) {
+        return true;
+    }
+
+    const parsedInterval = parseInt(rawInterval, 10);
+    if (Number.isNaN(parsedInterval)) {
+        return true;
+    }
+
+    return parsedInterval > 0;
+}
+
 /**
  * Get today's date key for daily stats (uses local timezone)
  */
@@ -67,6 +81,10 @@ function getDateKey() {
  * @param {Object} data.languageMatch - Language matching results
  */
 function trackRequest({ type, fetchTimeMs, subtitleCount, subtitles = [], languageMatch = null }) {
+    if (!areStatsWritesEnabled()) {
+        return;
+    }
+
     const dateKey = getDateKey();
 
     // Track request counts

@@ -2,10 +2,38 @@
  * Async Subtitle Cache - Non-blocking Get, Set, and Background Refresh
  * Uses LibSQL for async database operations
  */
+const crypto = require('crypto');
 const db = require('./database-libsql');
 const { log } = require('../utils');
 
 const REFRESH_INTERVAL = parseInt(process.env.CACHE_REFRESH_INTERVAL || '604800');
+const MAX_CACHE_RESULTS_PER_LANGUAGE = 200;
+
+function normalizeCacheDimension(value) {
+    return value == null ? 0 : value;
+}
+
+function buildStableSubtitleId(subtitle) {
+    const explicitId = subtitle.id ?? subtitle.subtitle_id;
+    if (explicitId !== undefined && explicitId !== null && String(explicitId).trim() !== '') {
+        return String(explicitId).trim();
+    }
+
+    const source = Array.isArray(subtitle.source)
+        ? subtitle.source[0]
+        : (subtitle.source || subtitle.provider || 'unknown');
+
+    const fingerprint = [
+        subtitle.url || '',
+        subtitle.title || subtitle.releaseName || subtitle.release || '',
+        source,
+        subtitle.lang || subtitle.language || '',
+        subtitle.format || '',
+        subtitle.needsConversion == null ? '' : String(subtitle.needsConversion)
+    ].join('|');
+
+    return crypto.createHash('sha1').update(fingerprint).digest('hex');
+}
 
 class SubtitleCacheAsync {
     /**
@@ -14,16 +42,30 @@ class SubtitleCacheAsync {
      */
     async get(imdbId, season, episode, language) {
         try {
+            const normalizedSeason = normalizeCacheDimension(season);
+            const normalizedEpisode = normalizeCacheDimension(episode);
             const result = await db.execute(`
-                SELECT *, 
-                       (strftime('%s', 'now') - updated_at) as age_seconds
-                FROM subtitle_cache 
+                SELECT 
+                    MAX(id) as id,
+                    MAX(subtitle_id) as subtitle_id,
+                    MAX(url) as url,
+                    language,
+                    MAX(format) as format,
+                    MAX(needs_conversion) as needs_conversion,
+                    MAX(rating) as rating,
+                    MAX(source) as source,
+                    MAX(title) as title,
+                    MAX(updated_at) as updated_at,
+                    (strftime('%s', 'now') - MAX(updated_at)) as age_seconds
+                FROM subtitle_cache
                 WHERE imdb_id = ? 
-                  AND (season IS ? OR (season IS NULL AND ? IS NULL))
-                  AND (episode IS ? OR (episode IS NULL AND ? IS NULL))
+                  AND (season = ? OR (season IS NULL AND ? = 0))
+                  AND (episode = ? OR (episode IS NULL AND ? = 0))
                   AND language = ?
+                GROUP BY COALESCE(NULLIF(url, ''), NULLIF(TRIM(subtitle_id), ''), COALESCE(title, ''), CAST(id AS TEXT)), language
                 ORDER BY rating DESC, id ASC
-            `, [imdbId, season, season, episode, episode, language]);
+                LIMIT ?
+            `, [imdbId, normalizedSeason, normalizedSeason, normalizedEpisode, normalizedEpisode, language, MAX_CACHE_RESULTS_PER_LANGUAGE]);
             
             if (result.rows.length === 0) {
                 return null;
@@ -59,6 +101,8 @@ class SubtitleCacheAsync {
         }
         
         try {
+            const normalizedSeason = normalizeCacheDimension(season);
+            const normalizedEpisode = normalizeCacheDimension(episode);
             const statements = subtitles.map(sub => {
                 const needsConv = sub.needsConversion === true ? 1 : 
                                  sub.needsConversion === false ? 0 : null;
@@ -79,10 +123,10 @@ class SubtitleCacheAsync {
                     `,
                     args: [
                         imdbId,
-                        season,
-                        episode,
+                        normalizedSeason,
+                        normalizedEpisode,
                         language,
-                        sub.id || sub.subtitle_id || `${Date.now()}-${Math.random()}`,
+                        buildStableSubtitleId(sub),
                         sub.title || sub.releaseName || null,
                         sub.url,
                         sub.format || null,
@@ -104,14 +148,16 @@ class SubtitleCacheAsync {
      */
     async touch(imdbId, season, episode, language) {
         try {
+            const normalizedSeason = normalizeCacheDimension(season);
+            const normalizedEpisode = normalizeCacheDimension(episode);
             await db.execute(`
                 UPDATE subtitle_cache 
                 SET updated_at = strftime('%s', 'now')
                 WHERE imdb_id = ? 
-                  AND (season IS ? OR (season IS NULL AND ? IS NULL))
-                  AND (episode IS ? OR (episode IS NULL AND ? IS NULL))
+                  AND (season = ? OR (season IS NULL AND ? = 0))
+                  AND (episode = ? OR (episode IS NULL AND ? = 0))
                   AND language = ?
-            `, [imdbId, season, season, episode, episode, language]);
+            `, [imdbId, normalizedSeason, normalizedSeason, normalizedEpisode, normalizedEpisode, language]);
         } catch (error) {
             log('error', '[Cache] Touch error:', error.message);
         }

@@ -5,6 +5,20 @@ const db = require('./database-libsql');
 const { log } = require('../utils');
 const { toAlpha3B } = require('../languages');
 
+function areStatsWritesEnabled() {
+    const rawInterval = process.env.STATS_REFRESH_INTERVAL;
+    if (rawInterval === undefined) {
+        return true;
+    }
+
+    const parsedInterval = parseInt(rawInterval, 10);
+    if (Number.isNaN(parsedInterval)) {
+        return true;
+    }
+
+    return parsedInterval > 0;
+}
+
 function getLocalDateString() {
     const now = new Date();
     const year = now.getFullYear();
@@ -15,6 +29,10 @@ function getLocalDateString() {
 
 class StatsDBAsync {
     async increment(key, amount = 1) {
+        if (!areStatsWritesEnabled()) {
+            return;
+        }
+
         try {
             await db.execute(`
                 INSERT INTO stats (stat_key, stat_value, updated_at)
@@ -53,6 +71,10 @@ class StatsDBAsync {
     }
     
     async recordDaily(data) {
+        if (!areStatsWritesEnabled()) {
+            return;
+        }
+
         const today = getLocalDateString();
         try {
             await db.execute(`
@@ -92,6 +114,10 @@ class StatsDBAsync {
     }
     
     async logRequest(data) {
+        if (!areStatsWritesEnabled()) {
+            return;
+        }
+
         try {
             const normalizedLanguages = (data.languages || [])
                 .map(lang => toAlpha3B(lang) || lang.toLowerCase())
@@ -135,6 +161,10 @@ class StatsDBAsync {
     }
     
     async recordProviderStats(data) {
+        if (!areStatsWritesEnabled()) {
+            return;
+        }
+
         const today = getLocalDateString();
         try {
             const updateResult = await db.execute(`
@@ -191,6 +221,10 @@ class StatsDBAsync {
     }
     
     async recordLanguageStats(data) {
+        if (!areStatsWritesEnabled()) {
+            return;
+        }
+
         const today = getLocalDateString();
         try {
             await db.execute(`
@@ -559,7 +593,7 @@ class StatsDBAsync {
     }
     
     async trackUserRequest(userId, requestData) {
-        if (!userId) return;
+        if (!areStatsWritesEnabled() || !userId) return;
         const { imdbId, contentType, languages, season, episode } = requestData;
         
         try {
