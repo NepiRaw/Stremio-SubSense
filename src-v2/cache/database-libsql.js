@@ -12,7 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const { log } = require('../../src/utils');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/subsense.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/subsense-v2.db');
 
 const dataDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dataDir)) {
