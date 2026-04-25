@@ -167,31 +167,25 @@ class StatsDBAsync {
     async recordProviderStats(data) {
         if (!this._writesEnabled()) return;
         const today = getLocalDateString();
+        const success = data.success ? 1 : 0;
+        const failure = data.success ? 0 : 1;
+        const responseMs = data.responseMs || 0;
+        const subsCount = data.subtitlesCount || 0;
         try {
-            const r = await db.execute(`
-                UPDATE provider_stats SET
+            await db.execute(`
+                INSERT INTO provider_stats
+                    (provider_name, date, total_requests, successful_requests, failed_requests, avg_response_ms, subtitles_returned)
+                VALUES (?, ?, 1, ?, ?, ?, ?)
+                ON CONFLICT(provider_name, date) DO UPDATE SET
                     total_requests = total_requests + 1,
                     successful_requests = successful_requests + ?,
                     failed_requests = failed_requests + ?,
                     avg_response_ms = (avg_response_ms * total_requests + ?) / (total_requests + 1),
                     subtitles_returned = subtitles_returned + ?
-                WHERE provider_name = ? AND date = ?
             `, [
-                data.success ? 1 : 0, data.success ? 0 : 1,
-                data.responseMs || 0, data.subtitlesCount || 0,
-                data.providerName, today
+                data.providerName, today, success, failure, responseMs, subsCount,
+                success, failure, responseMs, subsCount
             ]);
-            if (r.rowsAffected === 0) {
-                await db.execute(`
-                    INSERT INTO provider_stats
-                        (provider_name, date, total_requests, successful_requests, failed_requests, avg_response_ms, subtitles_returned)
-                    VALUES (?, ?, 1, ?, ?, ?, ?)
-                `, [
-                    data.providerName, today,
-                    data.success ? 1 : 0, data.success ? 0 : 1,
-                    data.responseMs || 0, data.subtitlesCount || 0
-                ]);
-            }
         } catch (err) {
             log('error', `[StatsDB] recordProviderStats error: ${err.message}`);
         }

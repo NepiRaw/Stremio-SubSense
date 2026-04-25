@@ -75,6 +75,14 @@ function sendCached(res, entry, cacheState) {
     res.send(entry.content);
 }
 
+/**
+ * Sanitize HTTP header value by encoding non-ASCII characters.
+ */
+function safeHeader(value) {
+    if (value == null) return '';
+    return String(value).replace(/[^\x20-\x7E]/g, (ch) => encodeURIComponent(ch));
+}
+
 function resolveEntry(cacheKey, build) {
     return dedupe(cacheKey, async () => {
         const cached = cacheGet(cacheKey);
@@ -176,7 +184,7 @@ async function fetchYify(subtitleId) {
         headers: {
             'X-YIFY-Original-Format': conv.originalFormat,
             'X-YIFY-Output-Format': conv.outputFormat,
-            'X-YIFY-Selected-File': selected.name
+            'X-YIFY-Selected-File': safeHeader(selected.name)
         }
     };
 }
@@ -292,7 +300,7 @@ async function fetchSubsource(subtitleId, apiKey, { season, episode, filename })
         headers: {
             'X-SubSource-Original-Format': conv.originalFormat,
             'X-SubSource-Output-Format': conv.outputFormat,
-            'X-SubSource-Selected-File': selected.name
+            'X-SubSource-Selected-File': safeHeader(selected.name)
         }
     };
 }
@@ -354,7 +362,7 @@ async function fetchBetaseries(subtitleId, lang) {
             'X-BetaSeries-Original-Format': conv.originalFormat,
             'X-BetaSeries-Output-Format': conv.outputFormat,
             'X-BetaSeries-Extracted': 'yes',
-            'X-BetaSeries-Selected-File': selected.name
+            'X-BetaSeries-Selected-File': safeHeader(selected.name)
         }
     };
 }
@@ -384,7 +392,7 @@ function materializeFromBuffer(buffer, { headerPrefix }) {
                 [`${headerPrefix}-Original-Format`]: conv.originalFormat,
                 [`${headerPrefix}-Output-Format`]: conv.outputFormat,
                 [`${headerPrefix}-Extracted`]: 'yes',
-                [`${headerPrefix}-Selected-File`]: selected.name
+                [`${headerPrefix}-Selected-File`]: safeHeader(selected.name)
             }
         };
     });

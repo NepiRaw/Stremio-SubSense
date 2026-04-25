@@ -42,7 +42,7 @@ router.get('/:config/subtitles/:type/:id/:extra?.json', async (req, res) => {
     setStremioHeaders(res);
     try {
         const { userId, config: rawConfig } = parseConfigParam(req.params.config);
-        const validatedConfig = parseConfig(rawConfig || {});
+        const validatedConfig = parseConfig(rawConfig || {}, { userId });
         if (userId) validatedConfig.userId = userId;
         const args = {
             type: req.params.type,
@@ -86,7 +86,11 @@ function parseConfigParam(raw) {
         try {
             config = decryptConfig(configString);
         } catch (decryptErr) {
-            log('warn', `[routes/stremio] encrypted config rejected: ${decryptErr.message}`);
+            const session = userId || 'anon';
+            const fragment = configString.length > 24
+                ? `${configString.slice(0, 12)}\u2026${configString.slice(-8)} (len=${configString.length})`
+                : configString;
+            log('warn', `[routes/stremio] encrypted config rejected: session=${session} url=/${raw}/manifest.json blob=${fragment} reason=${decryptErr.message}`);
         }
     }
     if (!config || typeof config !== 'object') config = {};

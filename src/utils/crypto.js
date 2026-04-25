@@ -94,8 +94,9 @@ function decryptConfig(encryptedData) {
         
         return JSON.parse(decrypted.toString('utf8'));
     } catch (error) {
-        log('error', `[Crypto] Decryption failed: ${error.message}`);
-        throw new Error('Failed to decrypt configuration - invalid or corrupted data');
+        const wrapped = new Error(`Failed to decrypt configuration - invalid or corrupted data (${error.message})`);
+        wrapped.cause = error;
+        throw wrapped;
     }
 }
 

@@ -32,11 +32,25 @@ services:
 
       # --- Stats (optional, default: minimal) ---
       # - STATS_REFRESH_INTERVAL=minimal       # "minimal" (default) | "0" (disabled) | <ms> (full mode)
+    volumes:
+      - ./data:/app/data
 
-      # --- Worker tuning (optional) ---
-      # - WORKER_CLEANUP_INTERVAL_MS=7200000   # Cache cleanup interval (default: 2h)
-      # - WORKER_CHECKPOINT_INTERVAL_MS=1800000 # WAL checkpoint interval (default: 30min)
-      # - WORKER_OPTIMIZE_INTERVAL_MS=21600000 # PRAGMA optimize interval (default: 6h)
-      # - WORKER_HEALTH_INTERVAL_MS=60000      # Health snapshot interval (default: 1min)
+  worker:
+    image: nepiraw/stremio-subsense:latest
+    container_name: stremio-subsense-worker
+    restart: unless-stopped
+    command: ["node", "worker.js"]
+    healthcheck:
+      disable: true
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/app/data/subsense.db
+      - LOG_LEVEL=info
+      # - STATS_REFRESH_INTERVAL=minimal
+      # - WORKER_CLEANUP_INTERVAL_MS=7200000
+      # - WORKER_CHECKPOINT_INTERVAL_MS=1800000
+      # - WORKER_OPTIMIZE_INTERVAL_MS=21600000
+      # - WORKER_HEALTH_INTERVAL_MS=60000
     volumes:
       - ./data:/app/data

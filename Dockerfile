@@ -14,6 +14,7 @@ COPY . .
 
 # Set environment variables
 ENV PORT=3100
+ENV HOST=0.0.0.0
 
 # Expose the port
 EXPOSE 3100

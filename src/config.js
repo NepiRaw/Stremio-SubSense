@@ -10,13 +10,12 @@ const DEFAULT_MAX_SUBTITLES_PER_LANG = 0;
 /**
  * Parse and validate user configuration
  * Supports both legacy (primaryLang/secondaryLang) and new (languages array) formats
- * @param {Object|string} config - Config object or comma-separated string
- * @returns {Object} Validated config with languages array and maxSubtitles
- * @throws {Error} If no language is configured
+ * Falls back to ['eng'] (English) if no language could be resolved.
  */
-function parseConfig(config) {
+function parseConfig(config, context = {}) {
     let languages = [];
     let maxSubtitles = DEFAULT_MAX_SUBTITLES_PER_LANG;
+    const userId = context.userId || (config && typeof config === 'object' ? config.userId : null) || 'anon';
 
     // Handle different config formats
     if (typeof config === 'string' && config.length > 0) {
@@ -57,10 +56,10 @@ function parseConfig(config) {
     // Remove duplicates while preserving order
     languages = [...new Set(languages)];
 
-    // Require at least one language
+    // Fallback to English when nothing was provided
     if (languages.length === 0) {
-        log('error', 'No languages configured. User must configure addon via /configure page.');
-        throw new Error('No languages configured. Please configure the addon first.');
+        log('warn', `[config] session=${userId} - No languages configured. Defaulting to English.`);
+        languages = ['eng'];
     }
 
     // Enforce maximum
@@ -80,8 +79,8 @@ function parseConfig(config) {
     }
 
     if (validLanguages.length === 0) {
-        log('error', 'No valid languages found in configuration');
-        throw new Error('No valid languages configured. Please configure the addon again.');
+        log('warn', `[config] session=${userId} - No valid languages after validation. Defaulting to English.`);
+        validLanguages.push('eng');
     }
 
     log('debug', `Config parsed: languages=[${validLanguages.join(', ')}], maxSubtitles=${maxSubtitles || 'unlimited'}`);
