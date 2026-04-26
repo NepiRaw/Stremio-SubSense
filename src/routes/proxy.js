@@ -97,7 +97,13 @@ const router = express.Router();
 
 router.get('/subtitle/:format/*', async (req, res) => {
     const { format } = req.params;
-    const originalUrl = req.params[0];
+    const prefix = `/api/subtitle/${format}/`;
+    const pIdx = req.originalUrl.indexOf(prefix);
+    let originalUrl = pIdx >= 0
+        ? req.originalUrl.slice(pIdx + prefix.length)
+        : (req.params[0] || '');
+    const qIdx = originalUrl.indexOf('?');
+    if (qIdx >= 0) originalUrl = originalUrl.slice(0, qIdx);
     if (!originalUrl) return res.status(400).send('Missing subtitle URL');
 
     const cacheKey = `subtitle:${format}:${originalUrl}`;
