@@ -82,6 +82,26 @@
                 <p class="hint-text">Limits how many subtitles are returned for each selected language.</p>
             </div>
 
+            <div class="form-group">
+                <div class="toggle-card">
+                    <div class="toggle-card-text">
+                        <span class="toggle-card-label">Keep ASS/SSA subtitles format</span>
+                        <span class="info-tooltip" tabindex="0" aria-label="More info">
+                            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                                <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm-1-12h2v2h-2V8zm0 4h2v6h-2v-6z"/>
+                            </svg>
+                            <span class="info-tooltip-bubble" role="tooltip">
+                                Stremio may not handle ASS/SSA subtitle format. You can choose to keep them if your client supports them. <br> If your client doesn't, the ASS subtitle simply won't load or throw an error. <br> A VTT fallback is always provided.
+                            </span>
+                        </span>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="keepAssToggle" aria-label="Keep ASS/SSA subtitles format">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+
             <div class="expandable-section" id="optionalSourcesSection">
                 <button type="button" class="expandable-header" id="optionalSourcesToggle">
                     <div class="expandable-title">

@@ -1,17 +1,23 @@
 /**
- * Async SQLite Database using LibSQL
+ * LibSQL database client and schema.
+ *
+ * Both the api and worker processes import this module. Schema creation is
+ * idempotent. WAL mode is enabled so reads from the api do not block writes
+ * from the worker (and vice versa). Stats schema is owned by the optional
+ * stats module and is not declared here.
  */
+
 const { createClient } = require('@libsql/client');
 const path = require('path');
 const fs = require('fs');
-const { log } = require('../utils');
+const { log } = require('../../src/utils');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../data/subsense.db');
 
 const dataDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
-    log('info', `[Cache] Created data directory: ${dataDir}`);
+    log('info', `[DB] Created data directory: ${dataDir}`);
 }
 
 const client = createClient({
@@ -19,173 +25,73 @@ const client = createClient({
     intMode: 'number'
 });
 
-log('info', `[Cache] LibSQL client initialized: ${DB_PATH}`);
+log('info', `[DB] LibSQL client initialized: ${DB_PATH}`);
 
+/**
+ * subtitle_cache (JSON blob):
+ *   One row per (imdb_id, season, episode, lang_key). The `subtitles` column
+ *   is a JSON-encoded array of fully-built subtitle objects already containing
+ *   any __SUBSRC_KEY__ placeholders required by the L1 materialize step.
+ *
+ *   `lang_key` is the sorted-comma-joined language list (e.g. "eng,fre")
+ *   matching the L1 cache key suffix. This lets the worker warm L1 with a
+ *   single SELECT * scan.
+ *
+ * response_cache (raw aggregated responses, optional):
+ *   Reserved for future use (e.g. caching the exact stremio response payload
+ *   including non-language-bucketed metadata). Currently a no-op placeholder
+ *   so the schema migration is forward-compatible.
+ */
 const schema = `
 CREATE TABLE IF NOT EXISTS subtitle_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    imdb_id TEXT NOT NULL,
-    season INTEGER,
-    episode INTEGER,
-    language TEXT NOT NULL,
-    subtitle_id TEXT,
-    title TEXT,
-    url TEXT NOT NULL,
-    format TEXT,
-    needs_conversion INTEGER,
-    rating REAL,
-    source TEXT,
-    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-    updated_at INTEGER DEFAULT (strftime('%s', 'now')),
-    UNIQUE(imdb_id, season, episode, language, subtitle_id)
+    imdb_id     TEXT    NOT NULL,
+    season      INTEGER NOT NULL DEFAULT 0,
+    episode     INTEGER NOT NULL DEFAULT 0,
+    lang_key    TEXT    NOT NULL,
+    subtitles   TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (imdb_id, season, episode, lang_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_cache_lookup 
-ON subtitle_cache(imdb_id, season, episode, language);
+CREATE INDEX IF NOT EXISTS idx_subtitle_cache_updated
+    ON subtitle_cache(updated_at);
 
-CREATE INDEX IF NOT EXISTS idx_cache_updated 
-ON subtitle_cache(updated_at);
-
-CREATE TABLE IF NOT EXISTS cache_stats_summary (
-    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    total_entries INTEGER DEFAULT 0,
-    unique_content INTEGER DEFAULT 0,
-    unique_languages INTEGER DEFAULT 0,
-    unique_sources INTEGER DEFAULT 0,
-    size_bytes INTEGER DEFAULT 0,
-    source_distribution TEXT DEFAULT '{}',
-    language_distribution TEXT DEFAULT '{}',
-    oldest_timestamp INTEGER DEFAULT 0,
-    newest_timestamp INTEGER DEFAULT 0,
-    avg_age_seconds REAL DEFAULT 0,
-    cache_hits INTEGER DEFAULT 0,
-    cache_misses INTEGER DEFAULT 0,
-    computed_at INTEGER DEFAULT (strftime('%s', 'now')),
-    computation_time_ms INTEGER DEFAULT 0
-);
-
-INSERT OR IGNORE INTO cache_stats_summary (id) VALUES (1);
-
-CREATE INDEX IF NOT EXISTS idx_cache_language 
-ON subtitle_cache(language);
-
-CREATE INDEX IF NOT EXISTS idx_cache_source 
-ON subtitle_cache(source);
-
-CREATE TABLE IF NOT EXISTS stats (
-    stat_key TEXT PRIMARY KEY,
-    stat_value INTEGER DEFAULT 0,
-    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS stats_daily (
-    date TEXT NOT NULL,
-    requests INTEGER DEFAULT 0,
-    cache_hits INTEGER DEFAULT 0,
-    cache_misses INTEGER DEFAULT 0,
-    conversions INTEGER DEFAULT 0,
-    movies INTEGER DEFAULT 0,
-    series INTEGER DEFAULT 0,
-    PRIMARY KEY (date)
-);
-
-CREATE TABLE IF NOT EXISTS request_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    imdb_id TEXT NOT NULL,
-    content_type TEXT,
-    languages TEXT,
-    result_count INTEGER,
-    cache_hit INTEGER,
-    response_time_ms INTEGER,
-    any_preferred_found INTEGER DEFAULT 0,
-    all_preferred_found INTEGER DEFAULT 0,
-    created_at INTEGER DEFAULT (strftime('%s', 'now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_request_log_created 
-ON request_log(created_at);
-
-CREATE TABLE IF NOT EXISTS provider_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    provider_name TEXT NOT NULL,
-    date TEXT NOT NULL,
-    total_requests INTEGER DEFAULT 0,
-    successful_requests INTEGER DEFAULT 0,
-    failed_requests INTEGER DEFAULT 0,
-    avg_response_ms INTEGER DEFAULT 0,
-    subtitles_returned INTEGER DEFAULT 0,
-    UNIQUE(provider_name, date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_provider_stats_date 
-ON provider_stats(date);
-
-CREATE TABLE IF NOT EXISTS language_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    language_code TEXT NOT NULL,
-    date TEXT NOT NULL,
-    priority TEXT DEFAULT 'preferred', 
-    requests_for INTEGER DEFAULT 0,
-    found_count INTEGER DEFAULT 0,
-    not_found_count INTEGER DEFAULT 0,
-    UNIQUE(language_code, date, priority)
-);
-
-CREATE INDEX IF NOT EXISTS idx_language_stats_date 
-ON language_stats(date);
-
-CREATE INDEX IF NOT EXISTS idx_language_stats_priority 
-ON language_stats(priority);
-
-CREATE TABLE IF NOT EXISTS user_tracking (
-    user_id TEXT PRIMARY KEY,
-    languages TEXT NOT NULL,
-    total_requests INTEGER DEFAULT 0,
-    movie_requests INTEGER DEFAULT 0,
-    series_requests INTEGER DEFAULT 0,
-    first_seen INTEGER DEFAULT (strftime('%s', 'now')),
-    last_active INTEGER DEFAULT (strftime('%s', 'now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_tracking_last_active 
-ON user_tracking(last_active);
-
-CREATE TABLE IF NOT EXISTS user_content_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    imdb_id TEXT NOT NULL,
-    content_type TEXT,
-    season INTEGER,
-    episode INTEGER,
-    requested_at INTEGER DEFAULT (strftime('%s', 'now')),
-    FOREIGN KEY (user_id) REFERENCES user_tracking(user_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_content_log_user 
-ON user_content_log(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_user_content_log_imdb 
-ON user_content_log(imdb_id);
 `;
 
+const PRAGMAS = [
+    'PRAGMA journal_mode = WAL',
+    'PRAGMA synchronous = NORMAL',
+    'PRAGMA temp_store = MEMORY',
+    'PRAGMA mmap_size = 268435456',
+    'PRAGMA cache_size = -65536',
+    'PRAGMA auto_vacuum = INCREMENTAL',
+    'PRAGMA busy_timeout = 5000',
+    'PRAGMA journal_size_limit = 67108864'
+];
+
 let initialized = false;
+let initPromise = null;
 
 async function initializeDatabase() {
     if (initialized) return client;
-    
-    try {
+    if (initPromise) return initPromise;
+
+    initPromise = (async () => {
         await client.executeMultiple(schema);
-        await client.execute("PRAGMA journal_mode = WAL");
-        initialized = true;
-        log('info', '[Cache] LibSQL database schema initialized');
-    } catch (err) {
-        if (!err.message.includes('already exists')) {
-            throw err;
+        for (const pragma of PRAGMAS) {
+            try {
+                await client.execute(pragma);
+            } catch (err) {
+                log('warn', `[DB] PRAGMA failed (${pragma}): ${err.message}`);
+            }
         }
         initialized = true;
-    }
-    
-    return client;
+        log('info', '[DB] schema + pragmas applied');
+        return client;
+    })();
+
+    return initPromise;
 }
 
 async function execute(sql, args = []) {
@@ -208,10 +114,28 @@ async function transaction(mode = 'write') {
     return client.transaction(mode);
 }
 
+/**
+ * Truncate the WAL file after merging it back into the main DB.
+ * Intended for the worker process; safe to call periodically and on shutdown.
+ */
+async function checkpoint() {
+    await initializeDatabase();
+    try {
+        await client.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (err) {
+        log('warn', `[DB] checkpoint failed: ${err.message}`);
+    }
+}
+
 function close() {
-    client.close();
+    try {
+        client.close();
+    } catch (err) {
+        log('warn', `[DB] close error: ${err.message}`);
+    }
     initialized = false;
-    log('info', '[Cache] LibSQL client closed');
+    initPromise = null;
+    log('info', '[DB] LibSQL client closed');
 }
 
 module.exports = {
@@ -221,6 +145,7 @@ module.exports = {
     executeMultiple,
     batch,
     transaction,
+    checkpoint,
     close,
     DB_PATH
 };

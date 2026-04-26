@@ -4,22 +4,53 @@ services:
     container_name: stremio-subsense
     restart: unless-stopped
     ports:
-      - "${PORT:-3100}:3100"
+      - "3100:3100"
     env_file:
       - .env
     environment:
-      - PORT=${PORT:-3100}
-      - SUBSENSE_BASE_URL=${SUBSENSE_BASE_URL:-https://subsense.yourdomain.com}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SUBSENSE_ENCRYPTION_KEY=${SUBSENSE_ENCRYPTION_KEY:-}
-      - SUBTITLE_SOURCES=${SUBTITLE_SOURCES:-wyzie,betaseries,yify,tvsubtitles,subsource}
-      - WYZIE_API_KEY=${WYZIE_API_KEY:-}
-      - WYZIE_SOURCES=${WYZIE_SOURCES:-}
-      - BETASERIES_API_KEY=${BETASERIES_API_KEY:-}
-      - SUBSOURCE_API_KEY=${SUBSOURCE_API_KEY:-}
-      - ENABLE_CACHE=${ENABLE_CACHE:-true}
-      - DB_PATH=${DB_PATH:-/app/data/subsense.db}
-      - CACHE_RETENTION_DAYS=${CACHE_RETENTION_DAYS:-30}
-      - STATS_REFRESH_INTERVAL=${STATS_REFRESH_INTERVAL:-120000}
+      # --- Core (mandatory) ---
+      - PORT=3100                              # Server port
+      - SUBSENSE_ENCRYPTION_KEY=               # REQUIRED
+
+      # --- Core (optional) ---
+      # - SUBSENSE_BASE_URL=                   # Public URL for proxy links (auto-detected if not set)
+      - LOG_LEVEL=info                         # debug | info | warn | error
+
+      # --- Provider selection (optional, defaults to all) ---
+      # - SUBTITLE_SOURCES=wyzie,betaseries,yify,tvsubtitles,subsource
+
+      # --- Provider API keys ---
+      # - WYZIE_API_KEY=                       # REQUIRED for wyzie provider (get at https://sub.wyzie.io/redeem)
+      # - WYZIE_SOURCES=                       # Optional - override wyzie sub-sources (comma-separated)
+      # - BETASERIES_API_KEY=                  # Optional - enables BetaSeries provider (French/English)
+
+      # --- Database / Cache (optional) ---
+      - DB_PATH=/app/data/subsense.db          # SQLite database path inside container
+      # - ENABLE_CACHE=true                    # Enable/disable subtitle caching
+      # - CACHE_RETENTION_DAYS=30              # Days before expired cache entries are cleaned up
+      # - CACHE_REFRESH_INTERVAL=604800        # Seconds before background refresh of stale entries
+
+      # --- Stats (optional, default: minimal) ---
+      # - STATS_REFRESH_INTERVAL=minimal       # "minimal" (default) | "0" (disabled) | <ms> (full mode)
+    volumes:
+      - ./data:/app/data
+
+  worker:
+    image: nepiraw/stremio-subsense:latest
+    container_name: stremio-subsense-worker
+    restart: unless-stopped
+    command: ["node", "worker.js"]
+    healthcheck:
+      disable: true
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/app/data/subsense.db
+      - LOG_LEVEL=info
+      # - STATS_REFRESH_INTERVAL=minimal
+      # - WORKER_CLEANUP_INTERVAL_MS=7200000
+      # - WORKER_CHECKPOINT_INTERVAL_MS=1800000
+      # - WORKER_OPTIMIZE_INTERVAL_MS=21600000
+      # - WORKER_HEALTH_INTERVAL_MS=60000
     volumes:
       - ./data:/app/data

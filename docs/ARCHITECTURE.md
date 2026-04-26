@@ -30,16 +30,16 @@ This document provides a complete technical overview of the SubSense Stremio add
 - **Multi-language support**: Up to 5 languages with equal priority
 - **Dual format support**: ASS subtitles converted to VTT (with styling) + SRT (fallback)
 - **Configurable limits**: User-selectable max subtitles per language
-- **SQLite caching**: Persistent cache with automatic cleanup
+- **SQLite caching**: Persistent cache with automatic cleanup via background worker
 - **Statistics dashboard**: Real-time analytics on usage and cache performance
+- **Two-process architecture**: API server + background worker for separation of concerns
 
 ### Technology Stack
 
 | Component | Technology |
 |-----------|------------|
-| Backend Runtime | Node.js 18+ |
+| Backend Runtime | Node.js 20+ |
 | Web Framework | Express.js |
-| Stremio SDK | stremio-addon-sdk |
 | Subtitle Sources | wyzie-lib |
 | Database | SQLite (LibSQL via @libsql/client) |
 | Process Manager | PM2 |
@@ -57,33 +57,40 @@ This document provides a complete technical overview of the SubSense Stremio add
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              EXPRESS SERVER                                  │
-│  server.js                                                                   │
+│  server.js (API process)                                                     │
 │  ├── Static files (/public)                                                 │
 │  ├── Configure page (/configure)                                            │
 │  ├── Stats pages (/stats, /stats/content)                                   │
-│  ├── Manifest route (/:config/manifest.json)                                │
-│  ├── Subtitle route (/:config/subtitles/:type/:id.json)                    │
-│  ├── Proxy route (/api/subtitle/:format/*)                                  │
-│  └── Stats API (/api/stats/*, /api/cache/*)                                 │
+│  ├── Stremio routes (src/routes/stremio.js)                                 │
+│  │   ├── Manifest route (/:config/manifest.json)                            │
+│  │   └── Subtitle route (/:config/subtitles/:type/:id/:extra?.json)        │
+│  ├── Proxy routes (src/routes/proxy.js)                                     │
+│  │   └── /api/subtitle/:format/*, /api/subsource/*, etc.                   │
+│  ├── Config API (src/routes/config-api.js)                                  │
+│  ├── Stats API (src/routes/stats-api.js)                                    │
+│  └── Health check (src/routes/health.js)                                    │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
         ┌─────────────────────────────┼─────────────────────────────┐
         ▼                             ▼                             ▼
 ┌───────────────┐          ┌───────────────────┐          ┌─────────────────┐
-│  manifest.js  │          │   src/subtitles.js │          │   src/cache/    │
-│               │          │                   │          │                 │
-│ generateManifest()       │ handleSubtitles() │          │ subtitle-cache  │
-│ generateDescription()    │ formatForStremio()│          │ stats-db        │
-└───────────────┘          │ prioritizeSubtitlesMulti()   │ cache-cleaner   │
-                           └───────────────────┘          └─────────────────┘
-                                      │
-                                      ▼
+│  manifest.js  │          │ src/handlers/     │          │   src/cache/    │
+│               │          │  subtitles.js     │          │                 │
+│ generateManifest()       │                   │          │ ResponseCache   │
+│ generateDescription()    │ handleSubtitles() │          │ InflightCache   │
+└───────────────┘          │                   │          │ subtitle-cache  │
+                           └───────────────────┘          │ cache-cleaner   │
+                                      │                   │ database-libsql │
+                                      ▼                   └─────────────────┘
                           ┌───────────────────────┐
                           │  src/providers/       │
-                          │  WyzieProvider.js     │
+                          │  ProviderManager.js   │
                           │                       │
-                          │ searchFastFirstMulti()│
-                          │ Uses: wyzie-lib       │
+                          │  WyzieProvider.js     │
+                          │  BetaSeriesProvider   │
+                          │  SubSourceProvider    │
+                          │  YIFYProvider         │
+                          │  TVsubtitlesProvider  │
                           └───────────────────────┘
                                       │
                                       ▼
@@ -91,6 +98,16 @@ This document provides a complete technical overview of the SubSense Stremio add
            │                  SUBTITLE SOURCES                    │
            │  OpenSubtitles │ SubDL │ Podnapisi │ Subf2m │ etc.  │
            └─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           BACKGROUND WORKER                                  │
+│  worker.js (separate process)                                                │
+│  ├── Cache cleanup (TTL-based DELETE, every 2h)                             │
+│  ├── WAL checkpoint (PASSIVE every 30min, TRUNCATE on shutdown)             │
+│  ├── PRAGMA optimize + incremental_vacuum (every 6h)                        │
+│  ├── Health snapshot (data/worker-health.json every 60s)                    │
+│  └── Stats refresh (if enabled)                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -101,57 +118,79 @@ This document provides a complete technical overview of the SubSense Stremio add
 
 | File | Purpose |
 |------|---------|
-| `server.js` | Express HTTP server, routes, middleware |
-| `addon.js` | Stremio SDK integration (backup handler) |
+| `server.js` | Express HTTP server, route mounting, bootstrap (API process) |
+| `worker.js` | Background worker: cache cleanup, WAL checkpoint, optimize, health |
 | `manifest.js` | Manifest generation with dynamic descriptions |
 
-### 3.2 Source Files (src/)
+### 3.2 Route Layer (src/routes/)
+
+| File | Purpose |
+|------|---------|
+| `index.js` | Exports all route modules |
+| `stremio.js` | Stremio manifest and subtitle routes with config parsing |
+| `proxy.js` | Subtitle format conversion and provider-specific proxies |
+| `health.js` | Health check endpoint |
+| `config-api.js` | Config/version API endpoints |
+| `stats-api.js` | Stats and cache browsing API endpoints |
+
+### 3.3 Handlers (src/handlers/)
+
+| File | Purpose |
+|------|---------|
+| `subtitles.js` | Main subtitle request handler, response cache warmup |
+
+### 3.4 Source Files (src/)
 
 | File | Purpose |
 |------|---------|
 | `config.js` | Parse and validate user configuration |
-| `subtitles.js` | Main subtitle request handler |
 | `languages.js` | Language code mapping (ISO 639-1 ↔ ISO 639-2/B) |
-| `stats.js` | In-memory statistics tracking |
 | `utils.js` | Logging and utility functions |
 
-### 3.3 Providers (src/providers/)
+### 3.5 Providers (src/providers/)
 
 | File | Purpose |
 |------|---------|
 | `BaseProvider.js` | Abstract base class for providers |
+| `ProviderManager.js` | Provider registry and orchestration |
 | `WyzieProvider.js` | wyzie-lib integration, fast-first strategy |
 | `BetaSeriesProvider.js` | BetaSeries API integration for French/English subtitles |
 | `SubSourceProvider.js` | SubSource.net API integration (user API key required) |
 | `YIFYProvider.js` | YIFY/YTS subtitle provider (movies only) |
 | `TVsubtitlesProvider.js` | TVsubtitles.net provider (TV series only) |
-| `ProviderManager.js` | Provider registry and orchestration |
-| `index.js` | Exports all providers |
+| `index.js` | Provider registration and exports |
 
-### 3.4 Cache (src/cache/)
+### 3.6 Cache (src/cache/)
 
 | File | Purpose |
 |------|---------|
 | `database-libsql.js` | LibSQL database connection singleton (async API) |
 | `subtitle-cache.js` | Subtitle result caching by content+language |
-| `stats-db.js` | SQLite database for analytics and request logs |
 | `cache-cleaner.js` | Automatic cleanup of old entries |
+| `ResponseCache.js` | L1 in-memory LRU cache for fast repeated lookups |
+| `InflightCache.js` | Deduplicates concurrent identical requests |
 | `index.js` | Exports cache modules |
 
-### 3.5 Services (src/services/)
+### 3.7 Stats (src/stats/)
 
 | File | Purpose |
 |------|---------|
-| `subtitle-converter.js` | ASS/SSA to VTT/SRT conversion with styling preservation |
+| `index.js` | Stats initialization and mode detection |
+| `schema.js` | Database schema for stats tables |
+| `stats-db.js` | SQLite database for analytics and request logs |
+| `stats-service.js` | Stats computation and refresh logic |
 
-### 3.6 Utilities (src/utils/)
+### 3.8 Utilities (src/utils/)
 
 | File | Purpose |
 |------|---------|
-| `validators.js` | Input validation (IMDB IDs, pagination) |
+| `validators.js` | Input validation (IMDB IDs, languages, pagination) |
 | `crypto.js` | AES-256-GCM encryption for user API keys |
 | `encoding.js` | Character encoding detection and conversion |
 | `filenameMatcher.js` | Subtitle-to-video filename matching logic |
+| `format.js` | Subtitle formatting and prioritization for Stremio |
+| `archive.js` | ZIP archive extraction utilities |
+| `subtitle-converter.js` | ASS/SSA to VTT/SRT conversion with styling preservation |
 
 ---
 
@@ -159,65 +198,23 @@ This document provides a complete technical overview of the SubSense Stremio add
 
 ### 4.0 Route Architecture (Express Routing)
 
-**Two-Tier Routing System:**
+SubSense uses a single Express router defined in `src/routes/stremio.js`. All Stremio protocol routes go through `parseConfigParam()` which handles:
 
-SubSense uses a dual-route approach to support both UserID and standard Stremio protocol:
+1. **UserID extraction**: Regex `^([a-z0-9]{8})-(.+)$` splits the URL parameter into an 8-char userId and the config payload.
+2. **Config decoding** (tried in order):
+   - URL-decoded JSON (modern client-side encoded config)
+   - Base64 JSON (legacy format)
+   - AES-256-GCM encrypted blob (when encryption is configured)
+3. **Fallback**: Empty config object `{}` if all decoding fails.
 
-**1. Custom UserID Route (Priority #1)**
-```javascript
-app.get('/:userIdConfig([a-z0-9]{8}-.+)/subtitles/:type/:id/:extra?.json', ...)
+**Routes:**
 ```
-- **Pattern:** `/:userIdConfig([a-z0-9]{8}-.+)/subtitles/:type/:id/:extra?.json`
-- **Regex Constraint:** `([a-z0-9]{8}-.+)` matches ONLY URLs with 8-char UserID prefix
-- **Purpose:** Extract UserID for analytics
-- **Extra Parameter:** Optional `:extra?` handles Stremio Web video metadata
-- **Match Examples:**
-  - ✅ `/abc12345-{config}/subtitles/movie/tt1254207.json`
-  - ✅ `/xyz98765-{config}/subtitles/series/tt0386676:1:1/filename=video.mp4&videoSize=15684012085.json`
-- **Does NOT Match:**
-  - ❌ `/{config}/subtitles/movie/tt1254207.json` (no UserID → falls to SDK router)
-
-**2. SDK Router (Priority #2 - Fallback)**
-```javascript
-app.use(getRouter(addonInterface))
-```
-- **Pattern (SDK-generated):** `/:config?/subtitles/:type/:id/:extra?.json`
-- **Purpose:** Standard Stremio protocol compliance for requests without UserID
-- **Extra Parameter:** SDK uses `qs.parse()` to decode video metadata from URL
-- **Match Examples:**
-  - ✅ `/{config}/subtitles/movie/tt1254207.json`
-  - ✅ `/subtitles/movie/tt1254207.json` (no config)
-  - ✅ `/{config}/subtitles/movie/tt1254207/filename=video.mp4&videoHash=abc123.json`
-
-**Routing Decision Tree:**
-```
-Request: /{param}/subtitles/{type}/{id}/{extra?}.json
-    │
-    ├─► Does {param} match [a-z0-9]{8}-.+ pattern?
-    │   │
-    │   ├─► YES → Custom UserID Route
-    │   │         - Extract UserID for analytics
-    │   │         - Parse config from URL
-    │   │         - Handle :extra parameter
-    │   │         - Add user session in DB
-    │   │
-    │   └─► NO  → SDK Router (fallback)
-    │             - Parse config (if present)
-    │             - Handle :extra parameter
-    │             - Standard protocol flow
-    │
-    └─► Both routes → handleSubtitles()
+GET /manifest.json                                    → Base manifest (no config)
+GET /:config/manifest.json                            → Configured manifest
+GET /:config/subtitles/:type/:id/:extra?.json         → Subtitle search
 ```
 
-**Extra Parameter Format (All Stremio Versions):**
-
-When Stremio (Desktop v4.4+, v5, Web, etc.) requests subtitles, it includes video metadata:
-```
-/config/subtitles/movie/tt1254207/filename=https://alldebrid.com/f/abc.mkv&videoSize=15684012085&videoHash=d78732c9565aeb2d.json
-```
-
-
-**Important:** The `:extra?` parameter is critical for production deployments. Without it, all Stremio versions (Desktop v4.4+, v5, Web) will receive 404 errors when requesting subtitles. This issue was not visible in localhost development.
+**Extra Parameter:** The optional `:extra?` carries video metadata from Stremio (filename, videoSize, videoHash) used to improve subtitle matching accuracy. Required for cross-platform compatibility.
 
 ---
 
@@ -227,54 +224,36 @@ When Stremio requests subtitles:
 
 ```
 1. Stremio Client sends request:
-   Desktop v4.4+, v5, Web:
-     GET /{userId}-{config}/subtitles/{type}/{id}/filename=video.mp4&videoSize=123456&videoHash=abc123.json
+   GET /{userId}-{config}/subtitles/{type}/{id}/filename=video.mp4&videoSize=123456&videoHash=abc123.json
 
-2. server.js receives request:
-   - Routes:
-     a) Custom UserID route: /:userIdConfig([a-z0-9]{8}-.+)/subtitles/:type/:id/:extra?.json
-        - Matches requests with 8-char UserID prefix
-        - Handles optional :extra parameter (Stremio Web video metadata)
-        - Extracts userId from URL for analytics
-     
-     b) SDK Router fallback: /:config?/subtitles/:type/:id/:extra?.json
-        - Handles requests without UserID prefix
-        - Standard Stremio protocol compliance
-   
-   - Extract userId (8-char alphanumeric) and config from URL
-   - Parse JSON config: { languages: [...], maxSubtitles: N }
-   - Parse :extra parameter (if present):
-       { filename: "video.mp4", videoSize: "15684012085", videoHash: "d78732c9565aeb2d" }
-   - Validate config via parseConfig()
+2. src/routes/stremio.js receives request:
+   - parseConfigParam() extracts userId and config
+   - Tries URL-decoded JSON → base64 JSON → encrypted decrypt
+   - parseConfig() validates languages, maxSubtitles
+   - Passes to handleSubtitlesRequest()
 
-3. handleSubtitles() in src/subtitles.js:
-   a. Parse Stremio ID (imdbId, season, episode)
-   b. Convert 3-letter to 2-letter language codes
-   c. Check cache for each requested language
-   
+3. src/handlers/subtitles.js:
+   a. Check L1 ResponseCache (in-memory LRU)
+   b. Check InflightCache (dedup concurrent identical requests)
+   c. Parse Stremio ID (imdbId, season, episode)
+   d. Convert 3-letter to 2-letter language codes
+   e. Check L2 SubtitleCache (SQLite)
+
 4. If CACHE HIT:
    - Return cached subtitles immediately
    - If stale, trigger background refresh
-   
+
 5. If CACHE MISS:
-   - Call fetchSubtitlesFastFirstMulti()
-   - WyzieProvider queries all sources in parallel
-   - Returns when minSubtitles threshold met
+   - ProviderManager.searchAll() queries all registered providers
+   - Returns when deadline met or all providers respond
    - Background fetch continues for caching
 
-6. prioritizeSubtitlesMulti():
-   - Group subtitles by language
-   - Sort by quality (non-HI preferred)
+6. Format results:
+   - prioritizeByLanguage() groups and sorts by quality
+   - formatForStremio() generates dual VTT+SRT entries for ASS subs
    - Apply maxSubtitles limit per language
 
-7. formatForStremio():
-   - For each subtitle:
-     - If ASS format: Return BOTH VTT (styled) + SRT (fallback) entries
-     - If SRT format: Return single entry
-   - Generate unique IDs: subsense-{index}-{subId}-{format}-{source}
-   - Build proxy URLs for subtitle conversion
-
-8. Return response:
+7. Store in L1 + L2 cache, return response:
    { subtitles: [{ id, url, lang, label, source }, ...] }
 ```
 
@@ -284,13 +263,13 @@ When Stremio requests subtitles:
 1. Stremio/User requests manifest:
    GET /{userId}-{config}/manifest.json
 
-2. server.js extracts userId and config
+2. src/routes/stremio.js:
+   - parseConfigParam() extracts userId and config
+   - generateManifest(config) creates manifest with dynamic description
+   - If languages configured: removes configurationRequired hint
+   - Logs: [Manifest] {userId} langs=[...] maxSubs=... url=...
 
-3. generateManifest() creates manifest:
-   - If languages configured: Dynamic description
-   - Includes: id, version, name, description, resources, types
-
-4. Return manifest JSON
+3. Return manifest JSON
 ```
 
 ### 4.3 Subtitle Proxy Flow
@@ -301,20 +280,20 @@ When Stremio fetches an actual subtitle file:
 1. Stremio requests:
    GET /api/subtitle/{format}/{originalUrl}
 
-2. server.js proxy endpoint:
+2. src/routes/proxy.js:
    - Fetch original subtitle from source
-   
+
 3. If format=ass:
    - Pass through as-is (no conversion)
-   
+
 4. If format=vtt and content is ASS:
    - Convert ASS to VTT using subtitle-converter
    - Preserves styling (italic, bold, underline)
-   
+
 5. If format=srt and content is ASS:
    - Convert ASS to SRT using subtitle-converter
    - Styling is lost (SRT doesn't support it)
-   
+
 6. Return subtitle content with appropriate Content-Type
 ```
 
@@ -334,14 +313,17 @@ When Stremio fetches an actual subtitle file:
 
 ### 5.2 URL Encoding
 
-The config is JSON-encoded in the manifest URL:
+The config is JSON-encoded in the manifest URL. Three encoding methods are supported:
 
 ```
-/{userId}-{encodedConfig}/manifest.json
-/{userId}-{encodedConfig}/subtitles/{type}/{id}.json
+1. URL-encoded JSON:
+   /abc12def-%7B%22languages%22%3A%5B%22eng%22%5D%7D/manifest.json
 
-Example:
-/abc12def-%7B%22languages%22%3A%5B%22eng%22%5D%7D/manifest.json
+2. Base64 JSON (legacy):
+   /abc12def-eyJsYW5ndWFnZXMiOlsiZW5nIl19/manifest.json
+
+3. AES-256-GCM encrypted (when SUBSENSE_ENCRYPTION_KEY is set):
+   /abc12def-SegHXxPyNSWKl.../manifest.json
 ```
 
 ### 5.3 Validation (src/config.js)
@@ -366,7 +348,7 @@ parseConfig(config) {
 ```javascript
 {
   id: 'com.subsense.nepiraw',
-  version: '1.0.0',  // from package.json
+  version: '2.0.0',  // from package.json
   name: 'SubSense',
   description: 'Dynamic based on config',
   logo: 'https://i.imgur.com/FaDbQAp.png',
@@ -377,7 +359,7 @@ parseConfig(config) {
   catalogs: [],
   behaviorHints: {
     configurable: true,
-    configurationRequired: true  // Removed after valid config
+    configurationRequired: true 
   }
 }
 ```
@@ -409,6 +391,7 @@ Uses wyzie-lib to aggregate from multiple sources:
 - Podnapisi
 - AnimeTosho
 - Gestdown
+- ...
 
 **BetaSeriesProvider** (`BetaSeriesProvider.js`):
 - French TV/Movie tracking service with subtitle support
@@ -445,44 +428,18 @@ SubSource API returns ALL subtitles for a movie/show without episode pre-filteri
    - Supports 4-digit episodes for anime (e.g., One Piece E1050)
    - Season packs without episode numbers pass through (proxy handles)
 
-2. **Proxy validation at download time** (server.js):
+2. **Proxy validation at download time** (proxy.js):
    - For single-file ZIPs: validates episode pattern in filename
    - Returns 404 if file episode doesn't match requested episode
    - Multi-file ZIPs: selects correct file using episode matching logic
 
-### 7.2 Fast-First Strategy with Timeout
+### 7.2 Provider Manager
 
-The Fast-First strategy ensures Stremio receives a response within 4 seconds to avoid being marked as "failed":
-
-```javascript
-// Constant at top of subtitles.js
-const FAST_FIRST_TIMEOUT_MS = 4000;
-
-fetchSubtitlesFastFirstMulti(parsed, languages, videoContext, config) {
-  1. Calculate deadline: Date.now() + FAST_FIRST_TIMEOUT_MS
-  2. Build provider list (Wyzie, BetaSeries, SubSource, etc.)
-  3. Race ALL providers against the deadline in parallel
-  4. At timeout (or when all complete):
-     - Collect results from providers that finished
-     - Track timed-out providers
-  5. Sort ALL results by filename similarity
-  6. Return immediately to Stremio
-  7. Timed-out providers continue in background:
-     - When complete, merge with existing cache
-     - Results available on next request
-}
-```
-
-**Example Log Output:**
-```
-[FastFirst] Starting with 3 providers: wyzie, betaseries, subsource
-[FastFirst] Got 45 subs in 4001ms (wyzie:42, betaseries(fr):TIMEOUT, subsource(fr):3)
-[FastFirst] Background: waiting for 1 timed-out providers...
-[FastFirst] Background complete: 8 subs in 18234ms (betaseries(fr):8)
-[FastFirst] Background cached: 8 fr subs
-```
-
-See [FAST_FIRST_SORTING_ARCHITECTURE_PLAN.md](FAST_FIRST_SORTING_ARCHITECTURE_PLAN.md) for full implementation details.
+`ProviderManager.js` orchestrates all registered providers:
+- Registers providers at startup via `registerDefaultProviders()`
+- `searchAll()` races all providers against a deadline
+- Deduplicates results across providers
+- Tracks per-provider statistics (success, errors, timeouts)
 
 ### 7.3 Dual Format (VTT + SRT)
 
@@ -497,7 +454,7 @@ formatForStremio(subtitles) {
         id: 'subsense-0-{subId}-vtt-{source}',
         url: '/api/subtitle/vtt/{originalUrl}'
       });
-      
+
       // Entry 2: SRT fallback (plain text, no styling)
       results.push({
         id: 'subsense-1-{subId}-srt-{source}',
@@ -514,12 +471,30 @@ formatForStremio(subtitles) {
 
 All database operations use LibSQL (@libsql/client) with async/await for non-blocking I/O.
 
-### 8.1 Subtitle Cache
+### 8.1 L1 — In-Memory Response Cache
+
+Located in `src/cache/ResponseCache.js`
+
+- **LRU eviction** with configurable max size
+- **TTL-based expiry** with stale-while-revalidate
+- **Per-language capacity** limits to prevent hot languages from evicting others
+- **Warmup** from L2 on startup for immediate cache hits
+- Keyed by: `{imdbId}:{season}:{episode}:{langList}`
+
+### 8.2 L1 — Inflight Cache
+
+Located in `src/cache/InflightCache.js`
+
+- Deduplicates concurrent identical requests
+- Returns a shared Promise for all callers of the same key
+- Automatically clears slot on resolve/reject
+
+### 8.3 L2 — Subtitle Cache (SQLite)
 
 Located in `src/cache/subtitle-cache.js`
 
 **Features**:
-- In-memory cache with SQLite persistence (async LibSQL)
+- Persistent SQLite via LibSQL (async API)
 - Keyed by: imdbId + season + episode + language
 - TTL: 24 hours default, background refresh when stale
 - Caches ALL languages fetched (benefits future users)
@@ -529,31 +504,26 @@ Located in `src/cache/subtitle-cache.js`
 {imdbId}:{season|null}:{episode|null}:{language}
 ```
 
-### 8.2 Stats Database
-
-Located in `src/cache/stats-db.js`
-
-**Features**:
-- Async LibSQL database for analytics
-- Uses pre-computed summary tables for performance with millions of entries
-- Smart skip optimization avoids recomputation when data unchanged
-
-**Tables**:
-- `subtitle_cache` - Cached subtitle entries
-- `request_log` - All subtitle requests
-- `daily_stats` - Aggregated daily metrics
-- `provider_stats` - Per-provider performance
-- `language_stats` - Language availability
-- `user_sessions` - Active session tracking
-- `cache_summary` - Pre-computed stats for fast queries
-
-### 8.3 Cache Cleaner
+### 8.4 Cache Cleaner
 
 Located in `src/cache/cache-cleaner.js`
 
-- Runs every 6 hours
-- Removes entries older than CACHE_RETENTION_DAYS (default: 30)
+- Runs in the **worker process** (not the API server)
+- TTL-based DELETE in 500-row batches every 2 hours
+- Removes entries older than CACHE_RETENTION_DAYS
 - Logs cleanup statistics
+
+### 8.5 Background Worker (worker.js)
+
+The worker is a separate process that handles all background maintenance:
+
+| Task | Interval | Purpose |
+|------|----------|---------|
+| Cache cleanup | Every 2h | Delete expired cache entries |
+| WAL checkpoint | Every 30min | PASSIVE checkpoint; TRUNCATE on shutdown |
+| PRAGMA optimize | Every 6h | Optimize indexes + incremental vacuum |
+| Health snapshot | Every 60s | Write `data/worker-health.json` |
+| Stats refresh | Configurable | Recompute stats summaries (if enabled) |
 
 ---
 
@@ -561,33 +531,34 @@ Located in `src/cache/cache-cleaner.js`
 
 > **Note:** Stats can be completely disabled by setting `STATS_REFRESH_INTERVAL=0`. See [Environment Variables](#12-environment-variables) for details.
 
-### 9.1 In-Memory Stats (src/stats.js)
+### 9.1 Stats System (src/stats/)
 
-Tracks real-time metrics:
-- Total requests
-- Movie/series counts
-- Total subtitles served
-- Average fetch time
-- Uptime
+The stats subsystem is modular:
+- `index.js` — Initialization and mode detection (full / lite / disabled)
+- `schema.js` — Database schema for stats tables
+- `stats-db.js` — SQLite database for analytics and request logs
+- `stats-service.js` — Stats computation and refresh logic
 
-### 9.2 Database Stats (stats-db.js)
-
-Persistent analytics:
+Tracks:
+- Total requests, movie/series counts
 - Cache hit/miss rates
-- Provider response times
+- Provider response times and error rates
 - Language availability rates
 - Daily request volumes
 - Active user sessions
 
-### 9.3 Stats API Endpoints
+### 9.2 Stats API Endpoints
 
 | Endpoint | Data |
 |----------|------|
+| `/api/config` | Returns `{statsEnabled, version}` — always available |
 | `/api/stats/cache` | Cache entries, hit rate, size |
 | `/api/stats/providers` | Per-provider performance |
-| `/api/stats/languages` | Language availability |
+| `/api/stats/languages` | Language stats |
 | `/api/stats/daily` | Daily aggregates |
-| `/stats/json` | In-memory runtime stats |
+| `/api/cache/search` | Search by IMDB |
+| `/api/cache/list` | List cached content |
+| `/stats/json` | Runtime stats |
 
 ---
 
@@ -646,14 +617,7 @@ window.location.href = url;
 |-------|--------|---------|
 | `/manifest.json` | GET | Base manifest |
 | `/:config/manifest.json` | GET | Configured manifest |
-| `/:userIdConfig([a-z0-9]{8}-.+)/subtitles/:type/:id/:extra?.json` | GET | Subtitle search (with UserID tracking) |
-| `/:config/subtitles/:type/:id/:extra?.json` | GET | Subtitle search (SDK fallback) |
-
-**Note on `:extra?` parameter:**
-- Added to support Stremio Web video metadata (filename, videoSize, videoHash)
-- Optional parameter parsed by SDK using querystring format
-- Improves subtitle matching accuracy (especially for hash-based searches)
-- Required for cross-platform compatibility (Desktop/Web/Mobile/TV)
+| `/:config/subtitles/:type/:id/:extra?.json` | GET | Subtitle search |
 
 ### 11.2 Proxy Routes
 
@@ -679,15 +643,6 @@ Some providers require server-side processing (ZIP extraction, auth, scraping):
 | **BetaSeries** | `/api/betaseries/proxy/:subtitleId` | `lang` (optional) | Fetches subtitle from BetaSeries CDN |
 | **YIFY** | `/api/yify/proxy/:subtitleId` | None | Scrapes yts-subs.com for download link |
 | **TVsubtitles** | `/api/tvsubtitles/proxy/:subtitleId` | `episodeUrl`, `lang` | Scrapes tvsubtitles.net for download |
-
-**SubSource Proxy Parameters:**
-- `key`: Encrypted user API key (required for SubSource API auth)
-- `episode`: Episode number for selecting correct file from ZIP archives
-- `season`: Season number for cache key differentiation
-- `filename`: *Unused - can be removed in future*
-
-**Why key is required for SubSource:**
-SubSource API requires authentication for the `/subtitles/{id}/download` endpoint. The key is encrypted client-side (AES-256-GCM) and passed in the URL, then decrypted server-side to authenticate with SubSource.
 
 #### 11.2.3 Subtitle URL Formats
 
@@ -744,34 +699,41 @@ Example: subsense-0-2607183-vtt-subsource
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | 3100 | Server port |
+| `HOST` | 127.0.0.1 | Server bind address |
 | `SUBSENSE_BASE_URL` | `http://127.0.0.1:{PORT}` | Public URL for proxied subtitles |
 | `LOG_LEVEL` | info | Logging: debug, info, warn, error |
-| `SUBSENSE_ENCRYPTION_KEY` | — | **Required** for SubSource. Encryption key for user API keys |
+| `SUBSENSE_ENCRYPTION_KEY` | — | **Required** for SubSource. AES-256-GCM encryption key for user API keys. Accepts 64-char hex or passphrase (PBKDF2-derived) |
 | `SUBTITLE_SOURCES` | All sources | Comma-separated provider list (wyzie, betaseries, yify, tvsubtitles, subsource) |
-| `WYZIE_SOURCES` | All sources | Comma-separated Wyzie sources (OpenSubtitles, Subdl, Subf2m, Podnapisi, AnimeTosho, Gestdown) |
+| `WYZIE_API_KEY` | — | **Required** for Wyzie provider. API key from https://sub.wyzie.io/redeem |
+| `WYZIE_SOURCES` | All sources | Comma-separated Wyzie sources override |
 | `BETASERIES_API_KEY` | — | BetaSeries API key for French/English subtitles |
 | `ENABLE_CACHE` | true | Enable/disable caching |
 | `DB_PATH` | ./data/subsense.db | SQLite database path |
 | `CACHE_RETENTION_DAYS` | 30 | Days before cache cleanup |
-| `MAX_SUBTITLES` | 30 | Fallback max (overridden by user config) |
-| `STATS_REFRESH_INTERVAL` | 120000 | Stats refresh interval in milliseconds. Set to `0` to disable stats entirely |
+| `CACHE_REFRESH_INTERVAL` | 604800 | Seconds before background refresh of stale cache entries |
+| `STATS_REFRESH_INTERVAL` | minimal | Stats mode: `minimal` (user tracking, 5min refresh), `0` (disabled), or number in ms for full stats |
 
 ### 12.1 Stats Configuration
 
-The stats system can be configured via `STATS_REFRESH_INTERVAL`:
+The stats system has three modes controlled by `STATS_REFRESH_INTERVAL`:
 
-| Value | Behavior |
-|-------|----------|
-| `120000` (default) | Refresh stats every 2 minutes |
+| Value | Mode | Behavior |
+|-------|------|----------|
+| *not set* or `"minimal"` | **Minimal** (default) | User tracking only (`user_tracking` table), refreshed every 5min |
+| `"0"` | **Disabled** | No tables, no tracking, zero CPU overhead |
+| Number > 0 (ms) | **Full** | Complete stats dashboard with all tables, refreshed at given interval |
+
+| Example Value | Full Mode Behavior |
+|---------------|-------------------|
+| `120000` | Refresh stats every 2 minutes |
 | `3600000` | Refresh stats every hour |
-| `0` | **Completely disable** stats (pages blocked, zero CPU overhead) |
 
 **When `STATS_REFRESH_INTERVAL=0`:**
 - `/stats` and `/stats/content` pages return styled 403 pages
 - All `/api/stats/*` and `/api/cache/*` endpoints return 403 Forbidden
 - `/api/config` returns `{statsEnabled: false, version: "x.x.x"}`
 - Navigation links to stats are hidden in frontend UI
-- No background stats computation (zero CPU overhead)
+- Zero CPU overhead from stats computation
 
 **Recommended settings by database size:**
 | Database Size | Recommended Interval |
@@ -781,17 +743,31 @@ The stats system can be configured via `STATS_REFRESH_INTERVAL`:
 | 1M - 10M entries | 600000 (10 min) |
 | > 10M entries | 3600000 (1 hour) or 0 (disabled) |
 
+### 12.2 Worker Configuration
+
+The worker process accepts these optional tuning variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WORKER_CLEANUP_INTERVAL_MS` | 7200000 (2h) | Cache cleanup interval |
+| `WORKER_CHECKPOINT_INTERVAL_MS` | 1800000 (30min) | WAL checkpoint interval |
+| `WORKER_OPTIMIZE_INTERVAL_MS` | 21600000 (6h) | PRAGMA optimize interval |
+| `WORKER_HEALTH_INTERVAL_MS` | 60000 (1min) | Health snapshot interval |
+| `WORKER_SHUTDOWN_TIMEOUT_MS` | 15000 (15s) | Graceful shutdown timeout |
+
 ---
 
 ## 13. File Structure
 
 ```
 Stremio-SubSense/
-├── server.js                       # Express server entry point
-├── addon.js                        # Stremio SDK addon builder
+├── server.js                       # Express server entry point (API process)
+├── worker.js                       # Background worker (cache cleanup, WAL, optimize)
 ├── manifest.js                     # Dynamic manifest generation
 ├── package.json                    # Dependencies and scripts
 ├── .env.example                    # Environment template
+├── Dockerfile                      # Container image definition
+├── docker-compose.yml              # Docker Compose for deployment
 │
 ├── public/                         # Static frontend files
 │   ├── index.html                  # Configure page
@@ -817,36 +793,55 @@ Stremio-SubSense/
 │
 ├── src/
 │   ├── config.js                   # Configuration parser
-│   ├── subtitles.js                # Main subtitle handler
 │   ├── languages.js                # Language code mapping
-│   ├── stats.js                    # In-memory stats
 │   ├── utils.js                    # Logging utilities
 │   │
+│   ├── routes/
+│   │   ├── index.js                # Route module exports
+│   │   ├── stremio.js              # Stremio manifest & subtitle routes
+│   │   ├── proxy.js                # Subtitle format & provider proxies
+│   │   ├── health.js               # Health check endpoint
+│   │   ├── config-api.js           # Config/version API
+│   │   └── stats-api.js            # Stats & cache browsing API
+│   │
+│   ├── handlers/
+│   │   └── subtitles.js            # Subtitle request handler
+│   │
 │   ├── providers/
-│   │   ├── index.js                # Provider exports
+│   │   ├── index.js                # Provider registration
 │   │   ├── BaseProvider.js         # Abstract base class
+│   │   ├── ProviderManager.js      # Provider orchestration
 │   │   ├── WyzieProvider.js        # wyzie-lib integration
 │   │   ├── BetaSeriesProvider.js   # BetaSeries API (FR/EN)
 │   │   ├── SubSourceProvider.js    # SubSource.net API
 │   │   ├── YIFYProvider.js         # YIFY/YTS (movies only)
-│   │   ├── TVsubtitlesProvider.js  # TVsubtitles.net (series only)
-│   │   └── ProviderManager.js
+│   │   └── TVsubtitlesProvider.js  # TVsubtitles.net (series only)
 │   │
 │   ├── cache/
 │   │   ├── index.js                # Cache exports
 │   │   ├── database-libsql.js      # LibSQL connection singleton
-│   │   ├── subtitle-cache.js
-│   │   ├── stats-db.js             # SQLite analytics
-│   │   └── cache-cleaner.js
+│   │   ├── subtitle-cache.js       # L2 subtitle cache (SQLite)
+│   │   ├── ResponseCache.js        # L1 in-memory LRU cache
+│   │   ├── InflightCache.js        # Request deduplication
+│   │   └── cache-cleaner.js        # TTL-based cache cleanup
 │   │
-│   ├── services/
-│   │   └── subtitle-converter.js  # ASS→VTT/SRT conversion with styling
+│   ├── stats/
+│   │   ├── index.js                # Stats initialization & mode
+│   │   ├── schema.js               # Stats DB schema
+│   │   ├── stats-db.js             # Stats database operations
+│   │   └── stats-service.js        # Stats computation
 │   │
 │   └── utils/
 │       ├── validators.js           # Input validation
-│       ├── crypto.js               # API key encryption
+│       ├── crypto.js               # AES-256-GCM encryption
 │       ├── encoding.js             # Character encoding
-│       └── filenameMatcher.js      # Subtitle-video matching
+│       ├── filenameMatcher.js      # Subtitle-video matching
+│       ├── format.js               # Subtitle formatting for Stremio
+│       ├── archive.js              # ZIP extraction utilities
+│       └── subtitle-converter.js   # ASS→VTT/SRT conversion with styling
+│
+└── docs/                           # Documentation
+    ├── ARCHITECTURE.md             # This file
 ```
 
 ---

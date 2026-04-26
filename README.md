@@ -68,23 +68,23 @@ services:
     container_name: stremio-subsense
     restart: unless-stopped
     ports:
-      - "${PORT:-3100}:3100"
+      - "3100:3100"
     env_file:
       - .env
     environment:
-      - PORT=${PORT:-3100}
-      - SUBSENSE_BASE_URL=${SUBSENSE_BASE_URL:-https://subsense.yourdomain.com}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - SUBSENSE_ENCRYPTION_KEY=${SUBSENSE_ENCRYPTION_KEY:-}
-      - SUBTITLE_SOURCES=${SUBTITLE_SOURCES:-wyzie,betaseries,yify,tvsubtitles,subsource}
-      - WYZIE_API_KEY=${WYZIE_API_KEY:-}
-      - WYZIE_SOURCES=${WYZIE_SOURCES:-}
-      - BETASERIES_API_KEY=${BETASERIES_API_KEY:-}
-      - SUBSOURCE_API_KEY=${SUBSOURCE_API_KEY:-}
-      - ENABLE_CACHE=${ENABLE_CACHE:-true}
-      - DB_PATH=${DB_PATH:-/app/data/subsense.db}
-      - CACHE_RETENTION_DAYS=${CACHE_RETENTION_DAYS:-30}
-      - STATS_REFRESH_INTERVAL=${STATS_REFRESH_INTERVAL:-120000}
+      # --- Core (mandatory) ---
+      - PORT=3100
+      - SUBSENSE_ENCRYPTION_KEY=               # REQUIRED - encryption key for user API keys
+
+      # --- Core (optional) ---
+      - LOG_LEVEL=info
+      - DB_PATH=/app/data/subsense.db
+
+      # --- Provider API keys ---
+      # - WYZIE_API_KEY=                       # REQUIRED for wyzie provider
+      # - BETASERIES_API_KEY=                  # Optional - BetaSeries (French/English)
+
+      # See .env.example for the full list of options
     volumes:
       - ./data:/app/data  # Persist cache database
 ```
@@ -121,7 +121,7 @@ Access your addon at `http://localhost:3100`
 | `ENABLE_CACHE` | Optional | `true` | Enable/disable subtitle result caching |
 | `DB_PATH` | Optional | `./data/subsense.db` | SQLite / LibSQL database path for the subtitle cache |
 | `CACHE_RETENTION_DAYS` | Optional | `30` | Days before old cache entries are cleaned up |
-| `STATS_REFRESH_INTERVAL` | Optional | `120000` | Stats refresh interval in milliseconds. Set to `0` to disable stats pages and stats API endpoints |
+| `STATS_REFRESH_INTERVAL` | Optional | `minimal` | Stats mode: `minimal` (user tracking only), `0` (disabled), or a number in ms for full stats |
 
 ### Available Providers
 
@@ -153,14 +153,23 @@ Browse cached content at `/stats/content`.
 
 ### Disabling Stats (Resource Optimization)
 
-For large databases (millions of entries), stats refresh can consume significant CPU. To reduce resource usage:
+The stats system has three modes controlled by `STATS_REFRESH_INTERVAL`:
+
+| Value | Mode | Behavior |
+|-------|------|----------|
+| *not set* or `minimal` | **Minimal** (default) | User tracking only, 5min refresh, low overhead |
+| `0` | **Disabled** | No stats, no tracking, zero CPU overhead |
+| `120000`, `3600000`, etc. | **Full** | Complete stats dashboard refreshed at given interval |
 
 ```yaml
 environment:
-  # Refresh every hour instead of every 2 minutes
+  # Minimal mode (default — lightweight user tracking)
+  - STATS_REFRESH_INTERVAL=minimal
+
+  # Full mode — refresh every hour
   - STATS_REFRESH_INTERVAL=3600000
   
-  # Or completely disable stats (pages blocked, zero overhead)
+  # Completely disable stats
   - STATS_REFRESH_INTERVAL=0
 ```
 

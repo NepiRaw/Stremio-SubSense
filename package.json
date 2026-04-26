@@ -1,11 +1,13 @@
 {
   "name": "subsense",
-  "version": "1.2.4",
+  "version": "2.0.0",
   "description": "Stremio subtitle addon that aggregates subtitles from multiple sources",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "worker": "node worker.js",
+    "dev": "nodemon server.js",
+    "dev:worker": "nodemon worker.js"
   },
   "keywords": [
     "stremio",
