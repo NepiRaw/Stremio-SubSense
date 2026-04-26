@@ -47,8 +47,13 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         parsed.imdbId,
         parsed.season,
         parsed.episode,
-        wyzieLanguages
+        wyzieLanguages,
+        { keepAss: parsedConfig.keepAss }
     );
+
+    if (parsedConfig.keepAss) {
+        log('debug', `[handler] keepAss=true ${reqTag(parsed, wyzieLanguages)}`);
+    }
 
     const requestContext = {
         videoFilename: filename,
@@ -81,7 +86,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         { dedupeKey: cacheKey }
     );
 
-    const { formatted, languageMatch } = buildFormatted(result.subtitles, languages, 0);
+    const { formatted, languageMatch } = buildFormatted(result.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });
 
     responseCache.set(cacheKey, formatted);
     persistL2(parsed, formatted).catch((err) =>
@@ -118,13 +123,13 @@ function fireTrack(parsedConfig, parsed, languages, subtitles, fetchTimeMs, cach
     } catch (_) { /* never fail the response path */ }
 }
 
-function buildFormatted(rawSubtitles, languages, maxPerLang) {
+function buildFormatted(rawSubtitles, languages, maxPerLang, opts = {}) {
     const { subtitles, languageMatch } = prioritizeByLanguage(rawSubtitles, languages, maxPerLang);
     languageMatch.languages = languages;
     languageMatch.found = languages.filter(l => languageMatch.byLanguage[l]?.found);
     languageMatch.anyPreferredFound = languageMatch.found.length > 0;
     languageMatch.allPreferredFound = languageMatch.found.length === languages.length;
-    return { formatted: formatForStremio(subtitles), languageMatch };
+    return { formatted: formatForStremio(subtitles, opts), languageMatch };
 }
 
 function persistL2(parsed, formatted) {
@@ -148,7 +153,7 @@ function wireBackgroundPromises(promises, parsed, languages, parsedConfig, cache
         }
         if (extra.length === 0) return;
 
-        const { formatted: extraFormatted } = buildFormatted(extra, languages, 0);
+        const { formatted: extraFormatted } = buildFormatted(extra, languages, 0, { keepAss: parsedConfig.keepAss });
         const merged = mergeFormatted(foregroundFormatted, extraFormatted);
         const added = merged.length - foregroundFormatted.length;
         if (added <= 0) return;
@@ -187,7 +192,7 @@ function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filena
             encryptedApiKeys: { subsource: encryptedApiKey }
         }, { dedupeKey: `${cacheKey}:refresh` })
             .then((res) => {
-                const { formatted } = buildFormatted(res.subtitles, languages, 0);
+                const { formatted } = buildFormatted(res.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });
                 if (formatted.length > 0) {
                     responseCache.set(cacheKey, formatted);
                     persistL2(parsed, formatted).catch(() => {});

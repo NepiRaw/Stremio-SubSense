@@ -33,7 +33,8 @@ router.get('/:config/manifest.json', (req, res) => {
     const langs = config && config.languages ? config.languages.join(',') : 'none';
     const maxSubs = config && config.maxSubtitles ? config.maxSubtitles : 'unlimited';
     const uid = config && config.userId ? config.userId : 'anon';
-    log('info', `[Manifest] ${uid} langs=[${langs}] maxSubs=${maxSubs} url=/${req.params.config}/manifest.json`);
+    const keepAss = !!(config && config.keepAss);
+    log('info', `[Manifest] ${uid} langs=[${langs}] maxSubs=${maxSubs} keepAss=${keepAss} url=/${req.params.config}/manifest.json`);
     setStremioHeaders(res);
     res.json(manifest);
 });

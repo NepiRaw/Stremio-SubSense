@@ -5,6 +5,7 @@
 const MAX_LANGUAGES = 5;
 const STORAGE_KEY = 'subsense_selected_languages';
 const MAX_SUBTITLES_STORAGE_KEY = 'subsense_max_subtitles';
+const KEEP_ASS_STORAGE_KEY = 'subsense_keep_ass';
 const DEFAULT_MAX_SUBTITLES = 10;
 
 let LANGUAGES = [
@@ -17,6 +18,7 @@ let LANGUAGES = [
 
 let selectedLanguages = [];
 let selectedMaxSubtitles = DEFAULT_MAX_SUBTITLES;
+let keepAss = false;
 let highlightIndex = -1;
 let subsourceApiKey = '';
 let subsourceApiKeyValid = false;
@@ -75,6 +77,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     ]);
     restoreSavedLanguages();
     restoreSavedMaxSubtitles();
+    restoreSavedKeepAss();
     initSubsourceApiKey();
     renderOptions();
     setupEventListeners();
@@ -109,6 +112,16 @@ function restoreSavedMaxSubtitles() {
         }
     } catch (error) {
         console.warn('Failed to restore max subtitles from localStorage:', error);
+    }
+}
+
+function restoreSavedKeepAss() {
+    try {
+        keepAss = localStorage.getItem(KEEP_ASS_STORAGE_KEY) === 'true';
+        const el = document.getElementById('keepAssToggle');
+        if (el) el.checked = keepAss;
+    } catch (error) {
+        console.warn('Failed to restore keepAss from localStorage:', error);
     }
 }
 
@@ -436,6 +449,14 @@ function setupEventListeners() {
     installBtn.addEventListener('click', installAddon);
     installDirectly.addEventListener('click', installAddon);
     copyUrlBtn.addEventListener('click', copyManifestUrl);
+
+    const keepAssEl = document.getElementById('keepAssToggle');
+    if (keepAssEl) {
+        keepAssEl.addEventListener('change', () => {
+            keepAss = !!keepAssEl.checked;
+            try { localStorage.setItem(KEEP_ASS_STORAGE_KEY, String(keepAss)); } catch (_) { /* ignore */ }
+        });
+    }
 }
 
 function openDropdown() {
@@ -475,6 +496,7 @@ function getManifestUrl() {
     if (selectedMaxSubtitles > 0) {
         config.maxSubtitles = selectedMaxSubtitles;
     }
+    if (keepAss) config.keepAss = true;
     
     const userId = generateUserId();
     const configString = encodeURIComponent(JSON.stringify(config));
@@ -501,6 +523,7 @@ function getStremioUrl() {
     if (selectedMaxSubtitles > 0) {
         config.maxSubtitles = selectedMaxSubtitles;
     }
+    if (keepAss) config.keepAss = true;
     
     const userId = generateUserId();
     const configString = encodeURIComponent(JSON.stringify(config));
@@ -713,6 +736,7 @@ async function getEncryptedConfig() {
     if (selectedMaxSubtitles > 0) {
         config.maxSubtitles = selectedMaxSubtitles;
     }
+    if (keepAss) config.keepAss = true;
     
     if (subsourceApiKey && subsourceApiKeyValid) {
         config.subsourceApiKey = subsourceApiKey;
@@ -741,6 +765,7 @@ async function getEncryptedConfig() {
     if (selectedMaxSubtitles > 0) {
         safeConfig.maxSubtitles = selectedMaxSubtitles;
     }
+    if (keepAss) safeConfig.keepAss = true;
     return encodeURIComponent(JSON.stringify(safeConfig));
 }
 

@@ -141,11 +141,16 @@ router.get('/subtitle/:format/*', async (req, res) => {
     }
 });
 
+function pickFmt(req) {
+    return (req && req.query && req.query.fmt === 'ass') ? 'ass' : 'vtt';
+}
+
 router.get('/yify/proxy/:subtitleId', async (req, res) => {
     const { subtitleId } = req.params;
-    const cacheKey = `yify:${subtitleId}`;
+    const fmt = pickFmt(req);
+    const cacheKey = `yify:${subtitleId}:${fmt}`;
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchYify(subtitleId));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchYify(subtitleId, fmt));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/yify] ${err.message}`);
@@ -153,7 +158,7 @@ router.get('/yify/proxy/:subtitleId', async (req, res) => {
     }
 });
 
-async function fetchYify(subtitleId) {
+async function fetchYify(subtitleId, fmt = 'vtt') {
     const pageUrl = `https://yts-subs.com/subtitles/${subtitleId}`;
     const pageRes = await fetch(pageUrl, { headers: BROWSER_UA });
     if (!pageRes.ok) {
@@ -177,7 +182,9 @@ async function fetchYify(subtitleId) {
     if (!entries || entries.length === 0) throw new Error('No subtitle in YIFY archive');
 
     const selected = entries.find((e) => e.name.toLowerCase().endsWith('.srt')) || entries[0];
-    const conv = convertForOutput(bufferToText(selected.getData()), 'vtt');
+    const original = detectEntryFormat(selected.name);
+    const target = (fmt === 'ass' && original === 'ass') ? 'ass' : 'vtt';
+    const conv = convertForOutput(bufferToText(selected.getData()), target);
     return {
         content: conv.content,
         contentType: contentTypeFor(conv.outputFormat),
@@ -192,9 +199,10 @@ async function fetchYify(subtitleId) {
 router.get('/tvsubtitles/proxy/:subtitleId', async (req, res) => {
     const { subtitleId } = req.params;
     const { episodeUrl, lang } = req.query;
-    const cacheKey = `tvsubs:${subtitleId}:${lang || 'en'}`;
+    const fmt = pickFmt(req);
+    const cacheKey = `tvsubs:${subtitleId}:${lang || 'en'}:${fmt}`;
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchTvsubs(subtitleId, episodeUrl));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchTvsubs(subtitleId, episodeUrl, fmt));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/tvsubs] ${err.message}`);
@@ -202,7 +210,7 @@ router.get('/tvsubtitles/proxy/:subtitleId', async (req, res) => {
     }
 });
 
-async function fetchTvsubs(subtitleId, episodeUrl) {
+async function fetchTvsubs(subtitleId, episodeUrl, fmt = 'vtt') {
     let downloadPageUrl = null;
     if (episodeUrl) {
         const epRes = await fetch(episodeUrl, { headers: BROWSER_UA });
@@ -233,14 +241,15 @@ async function fetchTvsubs(subtitleId, episodeUrl) {
         throw err;
     }
     const buffer = Buffer.from(await zipRes.arrayBuffer());
-    return materializeFromBuffer(buffer, { headerPrefix: 'X-TVsubs' });
+    return materializeFromBuffer(buffer, { headerPrefix: 'X-TVsubs', fmt });
 }
 
 router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     const { subtitleId } = req.params;
     const { key, season, episode, filename } = req.query;
+    const fmt = pickFmt(req);
     const fileHint = (typeof filename === 'string' && filename.trim()) ? filename.trim().toLowerCase() : 'nofilename';
-    const cacheKey = `subsource:${subtitleId}:${season || 'all'}:${episode || 'all'}:${fileHint}`;
+    const cacheKey = `subsource:${subtitleId}:${season || 'all'}:${episode || 'all'}:${fileHint}:${fmt}`;
 
     if (!key) return res.status(401).send('SubSource API key required');
     if (!decryptConfig) return res.status(500).send('Encryption not configured');
@@ -254,7 +263,7 @@ router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     }
 
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchSubsource(subtitleId, apiKey, { season, episode, filename }));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchSubsource(subtitleId, apiKey, { season, episode, filename, fmt }));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/subsource] ${err.message}`);
@@ -262,7 +271,7 @@ router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     }
 });
 
-async function fetchSubsource(subtitleId, apiKey, { season, episode, filename }) {
+async function fetchSubsource(subtitleId, apiKey, { season, episode, filename, fmt = 'vtt' }) {
     const url = `https://api.subsource.net/api/v1/subtitles/${subtitleId}/download`;
     const dlRes = await fetch(url, {
         headers: {
@@ -293,7 +302,8 @@ async function fetchSubsource(subtitleId, apiKey, { season, episode, filename })
 
     const format = detectEntryFormat(selected.name);
     const text = bufferToText(selected.getData());
-    const conv = convertForOutput(text, format === 'ass' ? 'vtt' : format);
+    const target = (format === 'ass') ? (fmt === 'ass' ? 'ass' : 'vtt') : format;
+    const conv = convertForOutput(text, target);
     return {
         content: conv.content,
         contentType: contentTypeFor(conv.outputFormat),
@@ -308,9 +318,10 @@ async function fetchSubsource(subtitleId, apiKey, { season, episode, filename })
 router.get('/betaseries/proxy/:subtitleId', async (req, res) => {
     const { subtitleId } = req.params;
     const lang = req.query.lang || 'vo';
-    const cacheKey = `betaseries:${subtitleId}:${lang}`;
+    const fmt = pickFmt(req);
+    const cacheKey = `betaseries:${subtitleId}:${lang}:${fmt}`;
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchBetaseries(subtitleId, lang));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchBetaseries(subtitleId, lang, fmt));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/betaseries] ${err.message}`);
@@ -323,7 +334,7 @@ const BETASERIES_LANG_PATTERNS = {
     vo: ['.vo.', '.en.', 'english', 'eng', '_vo', '-vo', '_en', '-en']
 };
 
-async function fetchBetaseries(subtitleId, lang) {
+async function fetchBetaseries(subtitleId, lang, fmt = 'vtt') {
     const url = `https://www.betaseries.com/srt/${subtitleId}`;
     const r = await fetch(url, { headers: { 'User-Agent': 'SubSense/2.0' } });
     if (!r.ok) {
@@ -354,7 +365,8 @@ async function fetchBetaseries(subtitleId, lang) {
         || entries[0];
 
     const format = detectEntryFormat(selected.name);
-    const conv = convertForOutput(bufferToText(selected.getData()), format === 'ass' ? 'vtt' : format);
+    const target = (format === 'ass') ? (fmt === 'ass' ? 'ass' : 'vtt') : format;
+    const conv = convertForOutput(bufferToText(selected.getData()), target);
     return {
         content: conv.content,
         contentType: contentTypeFor(conv.outputFormat),
@@ -367,7 +379,7 @@ async function fetchBetaseries(subtitleId, lang) {
     };
 }
 
-function materializeFromBuffer(buffer, { headerPrefix }) {
+function materializeFromBuffer(buffer, { headerPrefix, fmt = 'vtt' }) {
     return Promise.resolve(extractSubtitleEntries(buffer)).then((entries) => {
         if (!entries || entries.length === 0) {
             const text = bufferToText(buffer);
@@ -384,7 +396,8 @@ function materializeFromBuffer(buffer, { headerPrefix }) {
         }
         const selected = entries.find((e) => e.name.toLowerCase().endsWith('.srt')) || entries[0];
         const format = detectEntryFormat(selected.name);
-        const conv = convertForOutput(bufferToText(selected.getData()), format === 'ass' ? 'vtt' : format);
+        const target = (format === 'ass') ? (fmt === 'ass' ? 'ass' : 'vtt') : format;
+        const conv = convertForOutput(bufferToText(selected.getData()), target);
         return {
             content: conv.content,
             contentType: contentTypeFor(conv.outputFormat),

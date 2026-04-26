@@ -96,7 +96,9 @@ function parseConfig(config, context = {}) {
     if (config.subsourceApiKey) {
         result.subsourceApiKey = config.subsourceApiKey;
     }
-    
+
+    if (config.keepAss) result.keepAss = true;
+
     return result;
 }
 

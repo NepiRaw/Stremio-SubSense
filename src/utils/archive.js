@@ -188,6 +188,7 @@ function bufferToText(buffer) {
 
 function contentTypeFor(format) {
     if (format === 'vtt') return 'text/vtt; charset=utf-8';
+    if (format === 'ass' || format === 'ssa') return 'text/x-ssa; charset=utf-8';
     return 'text/plain; charset=utf-8';
 }
 

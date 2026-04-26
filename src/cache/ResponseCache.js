@@ -39,9 +39,10 @@ class ResponseCache {
         log('info', `[ResponseCache] initialized: max=${this.maxEntries} ttl=${this.ttlMs / HOUR_MS}h stale=${this.staleMs / HOUR_MS}h`);
     }
 
-    static buildKey(imdbId, season, episode, languages) {
+    static buildKey(imdbId, season, episode, languages, opts = {}) {
         const langs = (languages || []).slice().sort().join(',');
-        return `${imdbId}:${season || 0}:${episode || 0}:${langs}`;
+        const flags = opts.keepAss ? ':ass' : '';
+        return `${imdbId}:${season || 0}:${episode || 0}:${langs}${flags}`;
     }
 
     /**

@@ -60,11 +60,17 @@ function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
 }
 
 /**
- * Format provider subtitles
+ * Format provider subtitles for Stremio.
  *
- * ASS sources emit two entries: VTT (styling preserved) + SRT (plain fallback).
+ * For ASS/SSA sources we emit two entries per subtitle so the user can pick:
+ *   - opts.keepAss=true  →  ASS (original styling) + VTT fallback
+ *   - opts.keepAss=false →  VTT + SRT (both plain text, current default)
+ *
+ * Provider-proxy URLs (which extract+convert server-side) get a `?fmt=ass|vtt`
+ * query so the proxy serves the right format for each emitted entry.
  */
-function formatForStremio(subtitles) {
+function formatForStremio(subtitles, opts = {}) {
+    const keepAss = !!opts.keepAss;
     const out = [];
     let idx = 0;
 
@@ -84,29 +90,47 @@ function formatForStremio(subtitles) {
         const subIdBase = sub.id || Date.now();
         const sourceUrl = withSubsourcePlaceholder(sub.url);
 
-        // Preserve original metadata for filename matching on cache hits
         const matchMeta = {};
         if (sub.fileName) matchMeta.fileName = sub.fileName;
         if (release) matchMeta.releaseName = release;
         if (Array.isArray(sub.releases) && sub.releases.length > 0) matchMeta.releases = sub.releases;
 
         if (isAss) {
-            out.push({
-                id: `subsense-${idx++}-${subIdBase}-vtt-${source}`,
-                url: `${PROXY_BASE_URL}/api/subtitle/vtt/${sourceUrl}`,
-                lang,
-                label: baseLabel,
-                source,
-                ...matchMeta
-            });
-            out.push({
-                id: `subsense-${idx++}-${subIdBase}-srt-${source}`,
-                url: `${PROXY_BASE_URL}/api/subtitle/srt/${sourceUrl}`,
-                lang,
-                label: baseLabel,
-                source,
-                ...matchMeta
-            });
+            if (keepAss) {
+                out.push({
+                    id: `subsense-${idx++}-${subIdBase}-ass-${source}`,
+                    url: assProxyUrl(sourceUrl),
+                    lang,
+                    label: baseLabel,
+                    source,
+                    ...matchMeta
+                });
+                out.push({
+                    id: `subsense-${idx++}-${subIdBase}-vtt-${source}`,
+                    url: vttProxyUrl(sourceUrl),
+                    lang,
+                    label: baseLabel,
+                    source,
+                    ...matchMeta
+                });
+            } else {
+                out.push({
+                    id: `subsense-${idx++}-${subIdBase}-vtt-${source}`,
+                    url: vttProxyUrl(sourceUrl),
+                    lang,
+                    label: baseLabel,
+                    source,
+                    ...matchMeta
+                });
+                out.push({
+                    id: `subsense-${idx++}-${subIdBase}-srt-${source}`,
+                    url: `${PROXY_BASE_URL}/api/subtitle/srt/${sourceUrl}`,
+                    lang,
+                    label: baseLabel,
+                    source,
+                    ...matchMeta
+                });
+            }
         } else {
             const url = sub.needsConversion === false
                 ? sourceUrl
@@ -123,8 +147,26 @@ function formatForStremio(subtitles) {
     }
 
     const valid = out.filter((s) => !!s.url);
-    log('debug', `[format] ${subtitles.length} provider subs -> ${valid.length} stremio entries`);
+    log('debug', `[format] ${subtitles.length} provider subs -> ${valid.length} stremio entries${keepAss ? ' (keepAss)' : ''}`);
     return valid;
+}
+
+// Provider-proxy paths that perform server-side extraction+conversion and
+// honor a `?fmt=ass|vtt` hint so we can request the original ASS bytes.
+const PROVIDER_PROXY_RE = /\/api\/(yify|tvsubtitles|subsource|betaseries)\/proxy\//;
+
+function vttProxyUrl(sourceUrl) {
+    if (PROVIDER_PROXY_RE.test(sourceUrl)) return appendQuery(sourceUrl, 'fmt', 'vtt');
+    return `${PROXY_BASE_URL}/api/subtitle/vtt/${sourceUrl}`;
+}
+
+function assProxyUrl(sourceUrl) {
+    if (PROVIDER_PROXY_RE.test(sourceUrl)) return appendQuery(sourceUrl, 'fmt', 'ass');
+    return `${PROXY_BASE_URL}/api/subtitle/ass/${sourceUrl}`;
+}
+
+function appendQuery(url, key, value) {
+    return url + (url.includes('?') ? '&' : '?') + `${key}=${encodeURIComponent(value)}`;
 }
 
 function withSubsourcePlaceholder(url) {
