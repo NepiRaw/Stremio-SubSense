@@ -77,17 +77,13 @@ function formatForStremio(subtitles, opts = {}) {
     for (const sub of subtitles) {
         const subLang = sub.lang || sub.language || 'und';
         const lang = mapWyzieToStremio(subLang.substring(0, 2));
-        const display = sub.display || lang;
         const source = Array.isArray(sub.source) ? sub.source[0] : (sub.source || 'Unknown');
-        const hi = (sub.hearingImpaired || sub.isHearingImpaired || sub.hi) ? ' [HI]' : '';
+        const isHI = !!(sub.hearingImpaired || sub.isHearingImpaired || sub.hi);
         const release = sub.releaseName || sub.release || sub.media || '';
-        const baseLabel = release
-            ? `${display} | ${source} - ${release}${hi}`
-            : `${display} | ${source}${hi}`;
+        const nameForLabel = sub.fileName || release || '';
 
         const format = (sub.format || '').toLowerCase();
         const isAss = format === 'ass' || format === 'ssa' || sub.needsConversion === true;
-        const subIdBase = sub.id || Date.now();
         const sourceUrl = withSubsourcePlaceholder(sub.url);
 
         const matchMeta = {};
@@ -95,54 +91,30 @@ function formatForStremio(subtitles, opts = {}) {
         if (release) matchMeta.releaseName = release;
         if (Array.isArray(sub.releases) && sub.releases.length > 0) matchMeta.releases = sub.releases;
 
+        const emit = (fmt, url) => {
+            out.push({
+                id: buildId(idx++, fmt, source, lang),
+                url,
+                lang,
+                label: buildLabel(source, fmt, nameForLabel, isHI),
+                source,
+                ...matchMeta
+            });
+        };
+
         if (isAss) {
             if (keepAss) {
-                out.push({
-                    id: `subsense-${idx++}-${subIdBase}-ass-${source}`,
-                    url: assProxyUrl(sourceUrl),
-                    lang,
-                    label: baseLabel,
-                    source,
-                    ...matchMeta
-                });
-                out.push({
-                    id: `subsense-${idx++}-${subIdBase}-vtt-${source}`,
-                    url: vttProxyUrl(sourceUrl),
-                    lang,
-                    label: baseLabel,
-                    source,
-                    ...matchMeta
-                });
+                emit('ass', assProxyUrl(sourceUrl));
+                emit('vtt', vttProxyUrl(sourceUrl));
             } else {
-                out.push({
-                    id: `subsense-${idx++}-${subIdBase}-vtt-${source}`,
-                    url: vttProxyUrl(sourceUrl),
-                    lang,
-                    label: baseLabel,
-                    source,
-                    ...matchMeta
-                });
-                out.push({
-                    id: `subsense-${idx++}-${subIdBase}-srt-${source}`,
-                    url: `${PROXY_BASE_URL}/api/subtitle/srt/${sourceUrl}`,
-                    lang,
-                    label: baseLabel,
-                    source,
-                    ...matchMeta
-                });
+                emit('vtt', vttProxyUrl(sourceUrl));
+                emit('srt', `${PROXY_BASE_URL}/api/subtitle/srt/${sourceUrl}`);
             }
         } else {
             const url = sub.needsConversion === false
                 ? sourceUrl
                 : `${PROXY_BASE_URL}/api/subtitle/vtt/${sourceUrl}`;
-            out.push({
-                id: `subsense-${idx++}-${subIdBase}-${format || 'srt'}-${source}`,
-                url,
-                lang,
-                label: baseLabel,
-                source,
-                ...matchMeta
-            });
+            emit(format || 'srt', url);
         }
     }
 
@@ -154,6 +126,30 @@ function formatForStremio(subtitles, opts = {}) {
 // Provider-proxy paths that perform server-side extraction+conversion and
 // honor a `?fmt=ass|vtt` hint so we can request the original ASS bytes.
 const PROVIDER_PROXY_RE = /\/api\/(yify|tvsubtitles|subsource|betaseries)\/proxy\//;
+
+// Build the user-facing label: "Provider · [FORMAT] · <name> · [HI]"
+function buildLabel(provider, fmt, name, isHI) {
+    const parts = [displayProvider(provider), `[${(fmt || 'srt').toUpperCase()}]`];
+    if (name) parts.push(name);
+    let label = parts.join(' · ');
+    if (isHI) label += ' · HI';
+    return label;
+}
+
+// Build a stable, predictable Stremio entry id
+function buildId(idx, fmt, provider, lang) {
+    return `subsense-${(fmt || 'srt').toLowerCase()}-${slugProvider(provider)}-${lang || 'und'}-${idx}`;
+}
+
+function displayProvider(src) {
+    const s = String(src || 'Unknown');
+    if (/^[a-z0-9._-]+$/.test(s)) return s.charAt(0).toUpperCase() + s.slice(1);
+    return s;
+}
+
+function slugProvider(src) {
+    return String(src || 'unknown').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
 
 function vttProxyUrl(sourceUrl) {
     if (PROVIDER_PROXY_RE.test(sourceUrl)) return appendQuery(sourceUrl, 'fmt', 'vtt');
