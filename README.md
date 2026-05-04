@@ -50,6 +50,7 @@ Open `/configure` in your browser to access the configuration page.
 |--------|-------------|
 | **Languages** | Select up to 5 subtitle languages (English pre-selected by default) |
 | **Max Subtitles** | Limit subtitles per language (Unlimited, 3, 5, 10, 25, 50, 100) |
+| **SubDL API Key** | Optional API key for SubDL provider (get one at [subdl.com](https://subdl.com)) |
 | **SubSource API Key** | Optional API key for SubSource provider (get one at [subsource.net](https://subsource.net)) |
 
 ### Tips
@@ -113,7 +114,7 @@ Access your addon at `http://localhost:3100`
 | `SUBSENSE_BASE_URL` | Optional | Auto-detected | Public base URL used in generated proxy links for production deployments |
 | `LOG_LEVEL` | Optional | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 | `SUBSENSE_ENCRYPTION_KEY` | **Required** | — | Secret used to encrypt/decrypt user-provided provider API keys inside manifest URLs |
-| `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource` | Comma-separated list of enabled providers |
+| `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource,subdl` | Comma-separated list of enabled providers |
 | `WYZIE_API_KEY` | **Required** | — | Server-side Wyzie API key. Required because Wyzie now requires a key for search and download requests |
 | `WYZIE_SOURCES` | Optional | All available sources | Override the Wyzie sources queried by the `wyzie` provider |
 | `BETASERIES_API_KEY` | Optional | — | Server-side BetaSeries API key for BetaSeries subtitle searches |
@@ -130,6 +131,7 @@ These are the high-level providers that SubSense can use:
 | Provider | Description | Requires API Key |
 |----------|-------------|------------------|
 | `wyzie` | Aggregates multiple sources (see Wyzie Sources below) | Yes (server-side `WYZIE_API_KEY`) |
+| `subdl` | SubDL.com - Community-driven subtitle database | Yes (per-user) |
 | `subsource` | SubSource.net - Large subtitle database | Yes (per-user) |
 | `yify` | YIFY/YTS movie subtitles | No |
 | `tvsubtitles` | TVsubtitles.net for TV series | No |
