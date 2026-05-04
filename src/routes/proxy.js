@@ -8,6 +8,7 @@
  *   GET /api/yify/proxy/:subtitleId      — resolve YIFY ZIP and extract subtitle
  *   GET /api/tvsubtitles/proxy/:subtitleId
  *   GET /api/subsource/proxy/:subtitleId/:releaseName?
+ *   GET /api/subdl/proxy/*                              — SubDL ZIP proxy (public, no API key)
  *   GET /api/betaseries/proxy/:subtitleId
  *
  * All proxy results are cached in a single bounded LRU keyed by
@@ -427,6 +428,85 @@ function getProxyCacheStats() {
         maxEntries: PROXY_CACHE_MAX,
         ttlMs: PROXY_CACHE_TTL_MS,
         inflight: inflight.size
+    };
+}
+
+// SubDL proxy (public downloads, no API key needed)
+router.get('/subdl/proxy/*', async (req, res) => {
+    const prefix = '/api/subdl/proxy/';
+    const pIdx = req.originalUrl.indexOf(prefix);
+    let subdlPath = pIdx >= 0
+        ? req.originalUrl.slice(pIdx + prefix.length)
+        : (req.params[0] || '');
+    const qIdx = subdlPath.indexOf('?');
+    if (qIdx >= 0) subdlPath = subdlPath.slice(0, qIdx);
+
+    subdlPath = decodeURIComponent(subdlPath).replace(/^\/+/, '');
+    if (!subdlPath) return res.status(400).send('Missing subtitle path');
+
+    const { season, episode, filename } = req.query;
+    const fmt = pickFmt(req);
+    const fileHint = (typeof filename === 'string' && filename.trim())
+        ? filename.trim().toLowerCase() : 'nofilename';
+    const cacheKey = `subdl:${subdlPath}:${season || 'all'}:${episode || 'all'}:${fileHint}:${fmt}`;
+
+    try {
+        const { entry, hit } = await resolveEntry(cacheKey,
+            () => fetchSubdl(subdlPath, { season, episode, filename, fmt }));
+        sendCached(res, entry, hit ? 'hit' : 'miss');
+    } catch (err) {
+        log('error', `[proxy/subdl] ${err.message}`);
+        res.status(err.status || 500).send(`SubDL proxy error: ${err.message}`);
+    }
+});
+
+async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' }) {
+    const downloadUrl = `https://dl.subdl.com/${subdlPath}`;
+    const dlRes = await fetch(downloadUrl, {
+        headers: { 'User-Agent': 'SubSense/2.0' }
+    });
+    if (!dlRes.ok) {
+        const err = new Error(`subdl download ${dlRes.status}`);
+        err.status = dlRes.status;
+        throw err;
+    }
+
+    const buffer = Buffer.from(await dlRes.arrayBuffer());
+    const entries = await extractSubtitleEntries(buffer);
+    if (!entries || entries.length === 0) {
+        const text = bufferToText(buffer);
+        const conv = convertForOutput(text, 'vtt');
+        return {
+            content: conv.content,
+            contentType: contentTypeFor(conv.outputFormat),
+            headers: {
+                'X-SubDL-Original-Format': conv.originalFormat,
+                'X-SubDL-Output-Format': conv.outputFormat,
+                'X-SubDL-Extracted': 'no'
+            }
+        };
+    }
+
+    const selected = selectSubtitleEntry(entries, { season, episode, filename });
+    if (!selected) {
+        const err = new Error('No matching subtitle in SubDL archive');
+        err.status = 404;
+        throw err;
+    }
+
+    const format = detectEntryFormat(selected.name);
+    const text = bufferToText(selected.getData());
+    const target = (format === 'ass') ? (fmt === 'ass' ? 'ass' : 'vtt') : format;
+    const conv = convertForOutput(text, target);
+    return {
+        content: conv.content,
+        contentType: contentTypeFor(conv.outputFormat),
+        headers: {
+            'X-SubDL-Original-Format': conv.originalFormat,
+            'X-SubDL-Output-Format': conv.outputFormat,
+            'X-SubDL-Extracted': 'yes',
+            'X-SubDL-Selected-File': safeHeader(selected.name)
+        }
     };
 }
 

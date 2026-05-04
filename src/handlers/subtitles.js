@@ -35,6 +35,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const wyzieLanguages = languages.map(mapStremioToWyzie).filter(Boolean);
     const filename = (args.extra && args.extra.filename) || null;
     const apiKey = parsedConfig.subsourceApiKey || null;
+    const subdlApiKey = parsedConfig.subdlApiKey || null;
     const encryptedApiKey = apiKey && encryptConfig
         ? safeEncrypt({ apiKey })
         : null;
@@ -80,7 +81,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
             episode: parsed.episode,
             languages: wyzieLanguages,
             filename,
-            apiKeys: { subsource: apiKey },
+            apiKeys: { subsource: apiKey, subdl: subdlApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
         },
         { dedupeKey: cacheKey }
@@ -188,7 +189,7 @@ function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filena
             episode: parsed.episode,
             languages: wyzieLanguages,
             filename,
-            apiKeys: { subsource: apiKey },
+            apiKeys: { subsource: apiKey, subdl: subdlApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
         }, { dedupeKey: `${cacheKey}:refresh` })
             .then((res) => {

@@ -288,6 +288,90 @@ const SUBSOURCE_REGIONAL_MAP = {
     'fr-fr': 'french_france'
 };
 
+// SubDL uses uppercase codes (e.g., 'EN', 'FR', 'BR_PT')
+// Map SubDL code → ISO 639-1 (alpha2)
+const SUBDL_CODE_MAP = {
+    'AR': 'ar',      // Arabic
+    'BR_PT': 'pt',   // Brazilian Portuguese (maps to Portuguese base; pt-BR handled via regional)
+    'DA': 'da',      // Danish
+    'NL': 'nl',      // Dutch
+    'EN': 'en',      // English
+    'FA': 'fa',      // Farsi/Persian
+    'FI': 'fi',      // Finnish
+    'FR': 'fr',      // French
+    'ID': 'id',      // Indonesian
+    'IT': 'it',      // Italian
+    'NO': 'no',      // Norwegian
+    'RO': 'ro',      // Romanian
+    'ES': 'es',      // Spanish
+    'SV': 'sv',      // Swedish
+    'VI': 'vi',      // Vietnamese
+    'SQ': 'sq',      // Albanian
+    'AZ': 'az',      // Azerbaijani
+    'BE': 'be',      // Belarusian
+    'BN': 'bn',      // Bengali
+    'ZH_BG': 'zh',   // Chinese (Big 5 / Traditional)
+    'BS': 'bs',      // Bosnian
+    'BG': 'bg',      // Bulgarian
+    'MY': 'my',      // Burmese
+    'CA': 'ca',      // Catalan
+    'ZH': 'zh',      // Chinese (BG code / Simplified)
+    'HR': 'hr',      // Croatian
+    'CS': 'cs',      // Czech
+    'EO': 'eo',      // Esperanto
+    'ET': 'et',      // Estonian
+    'KA': 'ka',      // Georgian
+    'DE': 'de',      // German
+    'EL': 'el',      // Greek
+    'KL': 'kl',      // Greenlandic
+    'HE': 'he',      // Hebrew
+    'HI': 'hi',      // Hindi
+    'HU': 'hu',      // Hungarian
+    'IS': 'is',      // Icelandic
+    'JA': 'ja',      // Japanese
+    'KO': 'ko',      // Korean
+    'KU': 'ku',      // Kurdish
+    'LV': 'lv',      // Latvian
+    'LT': 'lt',      // Lithuanian
+    'MK': 'mk',      // Macedonian
+    'MS': 'ms',      // Malay
+    'ML': 'ml',      // Malayalam
+    'PL': 'pl',      // Polish
+    'PT': 'pt',      // Portuguese
+    'RU': 'ru',      // Russian
+    'SR': 'sr',      // Serbian
+    'SI': 'si',      // Sinhala
+    'SK': 'sk',      // Slovak
+    'SL': 'sl',      // Slovenian
+    'TL': 'tl',      // Tagalog
+    'TA': 'ta',      // Tamil
+    'TE': 'te',      // Telugu
+    'TH': 'th',      // Thai
+    'TR': 'tr',      // Turkish
+    'UK': 'uk',      // Ukrainian
+    'UR': 'ur',      // Urdu
+    'BG_EN': 'bg',   // Bulgarian + English
+    'NL_EN': 'nl',   // Dutch + English
+    'EN_DE': 'en',   // English + German
+    'HU_EN': 'hu',   // Hungarian + English
+};
+
+// Reverse: alpha2 → SubDL code
+const SUBDL_ALPHA2_TO_CODE = {
+    'ar': 'AR', 'da': 'DA', 'nl': 'NL', 'en': 'EN', 'fa': 'FA',
+    'fi': 'FI', 'fr': 'FR', 'id': 'ID', 'it': 'IT', 'no': 'NO',
+    'ro': 'RO', 'es': 'ES', 'sv': 'SV', 'vi': 'VI', 'sq': 'SQ',
+    'az': 'AZ', 'be': 'BE', 'bn': 'BN', 'bs': 'BS', 'bg': 'BG',
+    'my': 'MY', 'ca': 'CA', 'zh': 'ZH', 'hr': 'HR', 'cs': 'CS',
+    'eo': 'EO', 'et': 'ET', 'ka': 'KA', 'de': 'DE', 'el': 'EL',
+    'kl': 'KL', 'he': 'HE', 'hi': 'HI', 'hu': 'HU', 'is': 'IS',
+    'ja': 'JA', 'ko': 'KO', 'ku': 'KU', 'lv': 'LV', 'lt': 'LT',
+    'mk': 'MK', 'ms': 'MS', 'ml': 'ML', 'pl': 'PL', 'pt': 'PT',
+    'ru': 'RU', 'sr': 'SR', 'si': 'SI', 'sk': 'SK', 'sl': 'SL',
+    'tl': 'TL', 'ta': 'TA', 'te': 'TE', 'th': 'TH', 'tr': 'TR',
+    'uk': 'UK', 'ur': 'UR',
+};
+
 // ============================================================
 // LOOKUP FUNCTIONS
 // ============================================================
@@ -418,6 +502,42 @@ function getBySubsourceCode(code) {
 }
 
 /**
+ * Get language by SubDL code (e.g., 'EN', 'FR', 'BR_PT')
+ */
+function getBySubdlCode(code) {
+    if (!code) return null;
+
+    const alpha2 = SUBDL_CODE_MAP[code.toUpperCase()];
+    if (alpha2) {
+        const idx = _indexByAlpha2.get(alpha2.toLowerCase());
+        if (idx !== undefined) return LANGUAGE_TABLE[idx];
+    }
+
+    const nameIdx = _indexByName.get(code.toLowerCase());
+    if (nameIdx !== undefined) return LANGUAGE_TABLE[nameIdx];
+
+    return null;
+}
+
+/**
+ * Convert any SubSense code to SubDL API format
+ */
+function toSubdlCode(code) {
+    if (!code) return null;
+    const lower = code.toLowerCase();
+    
+    if (lower === 'pt-br') return 'BR_PT';
+    if (lower === 'zh-tw' || lower === 'zh-hk') return 'ZH_BG';
+    if (lower === 'zh-cn') return 'ZH';
+    
+    const lang = getByAnyCode(code);
+    if (!lang) return null;
+    
+    const subdlCode = SUBDL_ALPHA2_TO_CODE[lang.alpha2];
+    return subdlCode || null;
+}
+
+/**
  * Special code mappings for provider-specific codes not in ISO standards
  * OpenSubtitles and other providers use non-standard codes
  */
@@ -456,6 +576,7 @@ function getByAnyCode(code) {
            getByYifyCode(lowerCode) ||
            getByTvsubtitlesCode(lowerCode) ||
            getByBetaseriesCode(lowerCode) ||
+           getBySubdlCode(code) ||
            getByName(code) ||
            null;
 }
@@ -685,6 +806,8 @@ module.exports = {
     SPECIAL_CODE_MAPPINGS,
     SUBSOURCE_LANGUAGE_MAP,
     SUBSOURCE_REGIONAL_MAP,
+    SUBDL_CODE_MAP,
+    SUBDL_ALPHA2_TO_CODE,
     
     // Lookup functions
     getByAlpha2,
@@ -695,6 +818,7 @@ module.exports = {
     getByTvsubtitlesCode,
     getByBetaseriesCode,
     getBySubsourceCode,
+    getBySubdlCode,
     getByAnyCode,
     
     // Conversion functions
@@ -704,6 +828,7 @@ module.exports = {
     toTvsubtitlesCode,
     toBetaseriesCode,
     toSubsourceCode,
+    toSubdlCode,
     getDisplayName,
     getNativeName,
     

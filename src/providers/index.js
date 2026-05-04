@@ -6,6 +6,7 @@ const WyzieProvider = require('./WyzieProvider');
 const BetaSeriesProvider = require('./BetaSeriesProvider');
 const YIFYProvider = require('./YIFYProvider');
 const SubSourceProvider = require('./SubSourceProvider');
+const SubDLProvider = require('./SubDLProvider');
 const TVsubtitlesProvider = require('./TVsubtitlesProvider');
 
 function isEnabled(name) {
@@ -31,6 +32,9 @@ function registerDefaultProviders(manager = providerManager) {
     if (!manager.get('subsource') && isEnabled('subsource')) {
         manager.register(new SubSourceProvider());
     }
+    if (!manager.get('subdl') && isEnabled('subdl')) {
+        manager.register(new SubDLProvider());
+    }
     return manager;
 }
 
@@ -43,6 +47,7 @@ module.exports = {
     BetaSeriesProvider,
     YIFYProvider,
     SubSourceProvider,
+    SubDLProvider,
     TVsubtitlesProvider,
     registerDefaultProviders
 };

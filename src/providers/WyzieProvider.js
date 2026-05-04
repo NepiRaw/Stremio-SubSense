@@ -19,19 +19,20 @@ function getWyzieApiKey() {
 
 const SOURCE_METADATA = {
     'opensubtitles': { display: 'OpenSubtitles', icon: 'opensubtitles.ico', url: 'https://www.opensubtitles.com' },
-    'subdl':         { display: 'SubDL',         icon: 'subdl.png',         url: 'https://subdl.com' },
     'subf2m':        { display: 'Subf2m',        icon: 'subf2m.png',        url: 'https://subf2m.co' },
-    'podnapisi':     { display: 'Podnapisi',     icon: 'podnapisi.ico',     url: 'https://www.podnapisi.net' },
     'animetosho':    { display: 'AnimeTosho',    icon: 'animetosho.ico',    url: 'https://animetosho.org' },
     'gestdown':      { display: 'Gestdown',      icon: 'gestdown.png',      url: 'https://gestdown.info' },
     'jimaku':        { display: 'Jimaku',         icon: 'jimaku.png',        url: 'https://jimaku.cc' },
     'kitsunekko':    { display: 'Kitsunekko',    icon: 'kitsunekko.png',    url: 'https://kitsunekko.net' },
-    'yify':          { display: 'YIFY',           icon: 'yify.ico',          url: 'https://yts-subs.com' }
+    'yify':          { display: 'YIFY',           icon: 'yify.ico',          url: 'https://yts-subs.com' },
+    'ajatttools':    { display: 'AjattTools',     icon: null,                url: null },
+    'tvsubtitles':   { display: 'TVsubtitles',    icon: 'tvsubtitles.png',   url: 'https://www.tvsubtitles.net' }
 };
 
 const FALLBACK_SOURCES = [
-    'subdl', 'subf2m', 'opensubtitles', 'podnapisi',
-    'animetosho', 'jimaku', 'kitsunekko', 'gestdown', 'yify'
+    'subf2m', 'opensubtitles', 'animetosho',
+    'jimaku', 'kitsunekko', 'gestdown', 'yify',
+    'ajatttools', 'tvsubtitles'
 ];
 
 let _cachedSources = null;

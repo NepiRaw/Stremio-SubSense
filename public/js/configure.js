@@ -22,6 +22,8 @@ let keepAss = false;
 let highlightIndex = -1;
 let subsourceApiKey = '';
 let subsourceApiKeyValid = false;
+let subdlApiKey = '';
+let subdlApiKeyValid = false;
 
 const container = document.getElementById('multiselectContainer');
 const inputWrapper = document.getElementById('inputWrapper');
@@ -51,6 +53,12 @@ const testSubsourceKeyBtn = document.getElementById('testSubsourceKey');
 const subsourceApiStatus = document.getElementById('subsourceApiStatus');
 const subsourceSourceItem = document.getElementById('subsourceSourceItem');
 
+// SubDL API Key elements
+const subdlApiKeyInput = document.getElementById('subdlApiKey');
+const toggleSubdlKeyVisibility = document.getElementById('toggleSubdlKeyVisibility');
+const testSubdlKeyBtn = document.getElementById('testSubdlKey');
+const subdlApiStatus = document.getElementById('subdlApiStatus');
+
 // Optional Sources expandable section
 const optionalSourcesSection = document.getElementById('optionalSourcesSection');
 const optionalSourcesToggle = document.getElementById('optionalSourcesToggle');
@@ -79,6 +87,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     restoreSavedMaxSubtitles();
     restoreSavedKeepAss();
     initSubsourceApiKey();
+    initSubdlApiKey();
     renderOptions();
     setupEventListeners();
     updateInstallButtonState();
@@ -557,7 +566,7 @@ async function installAddon() {
     installDropdownToggle.disabled = true;
     
     // Use async version if API keys are configured
-    const stremioUrl = subsourceApiKeyValid ? 
+    const stremioUrl = (subsourceApiKeyValid || subdlApiKeyValid) ? 
         await getStremioUrlWithApiKeys() : 
         getStremioUrl();
     
@@ -580,7 +589,7 @@ async function copyManifestUrl() {
     }
     
     // Use async version if API keys are configured
-    const url = subsourceApiKeyValid ? 
+    const url = (subsourceApiKeyValid || subdlApiKeyValid) ? 
         await getManifestUrlWithApiKeys() : 
         getManifestUrl();
     
@@ -741,8 +750,11 @@ async function getEncryptedConfig() {
     if (subsourceApiKey && subsourceApiKeyValid) {
         config.subsourceApiKey = subsourceApiKey;
     }
+    if (subdlApiKey && subdlApiKeyValid) {
+        config.subdlApiKey = subdlApiKey;
+    }
     
-    if (config.subsourceApiKey) {
+    if (config.subsourceApiKey || config.subdlApiKey) {
         try {
             const response = await fetch('/api/config/encrypt', {
                 method: 'POST',
@@ -770,3 +782,94 @@ async function getEncryptedConfig() {
 }
 
 window.removeLanguage = removeLanguage;
+
+// ===== SubDL API Key Functions =====
+
+function initSubdlApiKey() {
+    if (toggleSubdlKeyVisibility) {
+        toggleSubdlKeyVisibility.addEventListener('click', () => {
+            const isPassword = subdlApiKeyInput.type === 'password';
+            subdlApiKeyInput.type = isPassword ? 'text' : 'password';
+            const eyeIcon = document.getElementById('subdlEyeIcon');
+            if (eyeIcon) {
+                const pathEl = eyeIcon.querySelector('path');
+                if (pathEl) {
+                    pathEl.setAttribute('d', isPassword ? EYE_CLOSED_PATH : EYE_OPEN_PATH);
+                }
+            }
+        });
+    }
+
+    if (testSubdlKeyBtn) {
+        testSubdlKeyBtn.addEventListener('click', () => {
+            const key = subdlApiKeyInput.value.trim();
+            if (key) {
+                validateSubdlApiKey(key, false);
+            } else {
+                updateSubdlStatus('unconfigured', 'Enter an API key to enable SubDL');
+            }
+        });
+    }
+
+    if (subdlApiKeyInput) {
+        subdlApiKeyInput.addEventListener('input', () => {
+            const key = subdlApiKeyInput.value.trim();
+            if (!key) {
+                subdlApiKey = '';
+                subdlApiKeyValid = false;
+                updateSubdlStatus('unconfigured', 'Enter an API key to enable SubDL');
+                setSubdlTestButtonBreathing(false);
+            } else if (!subdlApiKeyValid || key !== subdlApiKey) {
+                subdlApiKeyValid = false;
+                updateSubdlStatus('pending', 'Click Test to validate your API key');
+                setSubdlTestButtonBreathing(true);
+            }
+        });
+    }
+}
+
+async function validateSubdlApiKey(apiKey, silent = false) {
+    if (!silent) {
+        updateSubdlStatus('testing', 'Validating API key...');
+        if (testSubdlKeyBtn) testSubdlKeyBtn.disabled = true;
+        setSubdlTestButtonBreathing(false);
+    }
+
+    try {
+        const response = await fetch('/api/subdl/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey })
+        });
+        const result = await response.json();
+
+        if (result.valid) {
+            subdlApiKey = apiKey;
+            subdlApiKeyValid = true;
+            updateSubdlStatus('valid', 'API key is valid ✓');
+            if (!silent) showToast('SubDL API key validated!');
+        } else {
+            subdlApiKey = '';
+            subdlApiKeyValid = false;
+            updateSubdlStatus('invalid', result.error || 'Invalid API key');
+            if (!silent) showToast('Invalid API key', 'error');
+        }
+    } catch (error) {
+        updateSubdlStatus('invalid', 'Failed to validate - check connection');
+        if (!silent) showToast('Failed to validate API key', 'error');
+    } finally {
+        if (testSubdlKeyBtn) testSubdlKeyBtn.disabled = false;
+    }
+}
+
+function updateSubdlStatus(status, message) {
+    if (!subdlApiStatus) return;
+    subdlApiStatus.className = `api-status ${status}`;
+    const statusText = subdlApiStatus.querySelector('.status-text');
+    if (statusText) statusText.textContent = message;
+}
+
+function setSubdlTestButtonBreathing(enabled) {
+    if (!testSubdlKeyBtn) return;
+    testSubdlKeyBtn.classList.toggle('breathing', enabled);
+}

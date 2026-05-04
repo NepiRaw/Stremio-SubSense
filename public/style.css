@@ -2307,6 +2307,22 @@ code:hover {
     margin-bottom: 0;
 }
 
+.optional-source-item + .optional-source-item {
+    margin-top: 16px;
+}
+
+.optional-source-item .hint-text a {
+    color: var(--color-accent-blue);
+    text-decoration: none;
+    font-weight: 500;
+    transition: var(--transition);
+}
+
+.optional-source-item .hint-text a:hover {
+    color: #5B9FE8;
+    text-decoration: underline;
+}
+
 /* ===== API Key Input Styles ===== */
 .api-key-input-wrapper {
     display: flex;
