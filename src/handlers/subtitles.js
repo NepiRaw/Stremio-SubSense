@@ -182,6 +182,7 @@ function mergeFormatted(existing, extra) {
 }
 
 function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey, requestContext) {
+    const subdlApiKey = parsedConfig.subdlApiKey || null;
     setImmediate(() => {
         providerManager.searchAll({
             imdbId: parsed.imdbId,

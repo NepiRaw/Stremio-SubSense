@@ -457,27 +457,40 @@ class StatsDBAsync {
                        AVG(strftime('%s','now') - updated_at) as avg_age_seconds
                 FROM subtitle_cache
             `);
-            const [langResult, sizeResult] = await Promise.all([
+            const [langResult, sizeResult, sourceResult] = await Promise.all([
                 db.execute(`SELECT lang_key, COUNT(*) as count FROM subtitle_cache WHERE lang_key IS NOT NULL GROUP BY lang_key ORDER BY count DESC`),
-                db.execute('SELECT page_count * page_size as size_bytes FROM pragma_page_count(), pragma_page_size()')
+                db.execute('SELECT page_count * page_size as size_bytes FROM pragma_page_count(), pragma_page_size()'),
+                db.execute(`SELECT provider_name, SUM(subtitles_returned) as total_subs FROM provider_stats GROUP BY provider_name ORDER BY total_subs DESC`)
             ]);
             const c = combined.rows[0];
             const langDist = {};
-            langResult.rows.forEach(r => { if (r.lang_key) langDist[r.lang_key] = r.count; });
+            langResult.rows.forEach(r => {
+                if (!r.lang_key) return;
+                const langs = r.lang_key.split(',');
+                for (const lang of langs) {
+                    const trimmed = lang.trim();
+                    if (trimmed) langDist[trimmed] = (langDist[trimmed] || 0) + r.count;
+                }
+            });
+            const sourceDist = {};
+            sourceResult.rows.forEach(r => {
+                if (r.provider_name && r.total_subs > 0) sourceDist[r.provider_name] = r.total_subs;
+            });
+            const uniqueSources = Object.keys(sourceDist).length;
             const sizeBytes = sizeResult.rows[0]?.size_bytes || 0;
             const hr = await this.getCacheHitRate();
             const elapsed = Date.now() - start;
 
             await db.execute(`
                 UPDATE cache_stats_summary SET
-                    total_entries = ?, unique_content = ?, unique_languages = ?, unique_sources = 0,
-                    size_bytes = ?, source_distribution = '{}', language_distribution = ?,
+                    total_entries = ?, unique_content = ?, unique_languages = ?, unique_sources = ?,
+                    size_bytes = ?, source_distribution = ?, language_distribution = ?,
                     oldest_timestamp = ?, newest_timestamp = ?, avg_age_seconds = ?,
                     cache_hits = ?, cache_misses = ?, computed_at = strftime('%s','now'), computation_time_ms = ?
                 WHERE id = 1
             `, [
-                c.total_entries, c.unique_content, c.unique_languages,
-                sizeBytes, JSON.stringify(langDist),
+                c.total_entries, c.unique_content, Object.keys(langDist).length, uniqueSources,
+                sizeBytes, JSON.stringify(sourceDist), JSON.stringify(langDist),
                 c.oldest_timestamp || 0, c.newest_timestamp || 0, c.avg_age_seconds || 0,
                 hr.hits, hr.misses, elapsed
             ]);
