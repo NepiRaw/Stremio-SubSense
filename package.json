@@ -1,6 +1,6 @@
 {
   "name": "subsense",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Stremio subtitle addon that aggregates subtitles from multiple sources",
   "main": "server.js",
   "scripts": {
@@ -37,6 +37,7 @@
     "ytssubs": "^1.0.2"
   },
   "devDependencies": {
+    "lzma-native": "^8.0.6",
     "nodemon": "^3.0.2"
   }
 }

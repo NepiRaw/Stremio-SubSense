@@ -8,6 +8,7 @@ const YIFYProvider = require('./YIFYProvider');
 const SubSourceProvider = require('./SubSourceProvider');
 const SubDLProvider = require('./SubDLProvider');
 const TVsubtitlesProvider = require('./TVsubtitlesProvider');
+const AnimeToshoProvider = require('./AnimeToshoProvider');
 
 function isEnabled(name) {
     const sources = process.env.SUBTITLE_SOURCES;
@@ -35,6 +36,9 @@ function registerDefaultProviders(manager = providerManager) {
     if (!manager.get('subdl') && isEnabled('subdl')) {
         manager.register(new SubDLProvider());
     }
+    if (!manager.get('animetosho') && isEnabled('animetosho')) {
+        manager.register(new AnimeToshoProvider());
+    }
     return manager;
 }
 
@@ -49,5 +53,6 @@ module.exports = {
     SubSourceProvider,
     SubDLProvider,
     TVsubtitlesProvider,
+    AnimeToshoProvider,
     registerDefaultProviders
 };

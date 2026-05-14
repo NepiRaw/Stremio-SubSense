@@ -510,5 +510,89 @@ async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' })
     };
 }
 
+// =====================================================
+// AnimeTosho subtitle proxy
+// =====================================================
+
+let lzma = null;
+try { lzma = require('lzma-native'); }
+catch (_) { log('warn', '[proxy] lzma-native unavailable; AnimeTosho downloads disabled'); }
+
+/**
+ * AnimeTosho subtitle proxy.
+ * Downloads XZ-compressed subtitle from AT storage, decompresses, converts format.
+ *
+ * GET /api/animetosho/proxy/:hexId?fmt=vtt|ass|srt
+ */
+router.get('/animetosho/proxy/:hexId', async (req, res) => {
+    const { hexId } = req.params;
+    const fmt = pickFmt(req);
+
+    // Validate hex ID format (8 hex chars)
+    if (!/^[0-9a-f]{8}$/i.test(hexId)) {
+        return res.status(400).send('Invalid attachment ID');
+    }
+
+    if (!lzma) {
+        return res.status(500).send('XZ decompression not available');
+    }
+
+    const cacheKey = `animetosho:${hexId}:${fmt}`;
+
+    try {
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchAnimetosho(hexId, fmt));
+        sendCached(res, entry, hit ? 'hit' : 'miss');
+    } catch (err) {
+        log('error', `[proxy/animetosho] ${hexId}: ${err.message}`);
+        res.status(err.status || 500).send(`AnimeTosho proxy error: ${err.message}`);
+    }
+});
+
+async function fetchAnimetosho(hexId, fmt = 'vtt') {
+    const url = `https://storage.animetosho.org/attach/${hexId}/file.xz`;
+
+    const response = await fetch(url, {
+        headers: { 'User-Agent': 'SubSense-Stremio/2.0' },
+        signal: AbortSignal.timeout(30000)
+    });
+
+    if (!response.ok) {
+        const err = new Error(`AT storage returned ${response.status}`);
+        err.status = response.status === 404 ? 404 : 502;
+        throw err;
+    }
+
+    const compressed = Buffer.from(await response.arrayBuffer());
+
+    // Decompress XZ using lzma-native
+    const decompressed = await new Promise((resolve, reject) => {
+        lzma.decompress(compressed, (result, error) => {
+            if (error) reject(new Error(`XZ decompression failed: ${error}`));
+            else resolve(result);
+        });
+    });
+
+    const text = decompressed.toString('utf8');
+
+    // Detect original format
+    const originalFormat = text.includes('[Script Info]') ? 'ass' :
+                          /^\d+\s*\r?\n\d{2}:\d{2}/.test(text) ? 'srt' :
+                          text.includes('WEBVTT') ? 'vtt' : 'unknown';
+
+    // Convert if needed
+    const target = (fmt === 'ass' && originalFormat === 'ass') ? 'ass' : fmt;
+    const conv = convertForOutput(text, target);
+
+    return {
+        content: conv.content,
+        contentType: contentTypeFor(conv.outputFormat),
+        headers: {
+            'X-SubSense-Original-Format': originalFormat,
+            'X-SubSense-Output-Format': conv.outputFormat,
+            'X-SubSense-Source': 'animetosho'
+        }
+    };
+}
+
 module.exports = router;
 module.exports.getProxyCacheStats = getProxyCacheStats;

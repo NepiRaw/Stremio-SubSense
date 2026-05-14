@@ -121,7 +121,7 @@ const MAX_LANGUAGES = 20;
 
 let lastStats = null;
 const CHART_GRADIENTS = {
-    source: ['#4A90E2', '#9B59B6', '#2ECC71', '#E74C3C', '#F39C12', '#1ABC9C'],
+    source: ['#4A90E2', '#9B59B6', '#2ECC71', '#E74C3C', '#F39C12', '#1ABC9C', '#E84393'],
     language: ['#6BA5E7', '#B07CC6', '#58D68D', '#ED7669', '#F6B93B', '#48C9B0']
 };
 

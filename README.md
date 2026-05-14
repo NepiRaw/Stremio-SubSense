@@ -114,10 +114,12 @@ Access your addon at `http://localhost:3100`
 | `SUBSENSE_BASE_URL` | Optional | Auto-detected | Public base URL used in generated proxy links for production deployments |
 | `LOG_LEVEL` | Optional | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 | `SUBSENSE_ENCRYPTION_KEY` | **Required** | — | Secret used to encrypt/decrypt user-provided provider API keys inside manifest URLs |
-| `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource,subdl` | Comma-separated list of enabled providers |
+| `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource,subdl,animetosho` | Comma-separated list of enabled providers |
 | `WYZIE_API_KEY` | **Required** | — | Server-side Wyzie API key. Required because Wyzie now requires a key for search and download requests |
 | `WYZIE_SOURCES` | Optional | All available sources | Override the Wyzie sources queried by the `wyzie` provider |
 | `BETASERIES_API_KEY` | Optional | — | Server-side BetaSeries API key for BetaSeries subtitle searches |
+| `ANIDB_CLIENT` | Optional | — | AniDB HTTP API client name (register at [anidb.net](https://anidb.net)). Required for AnimeTosho TV episode search |
+| `ANIDB_CLIENT_VER` | Optional | — | AniDB HTTP API client version. Required alongside `ANIDB_CLIENT` |
 | `SUBSOURCE_API_KEY` | Optional | — | Server-side SubSource API key for local testing/admin validation only. End users normally provide their own key through addon configuration |
 | `ENABLE_CACHE` | Optional | `true` | Enable/disable subtitle result caching |
 | `DB_PATH` | Optional | `./data/subsense.db` | SQLite / LibSQL database path for the subtitle cache |
@@ -136,6 +138,7 @@ These are the high-level providers that SubSense can use:
 | `yify` | YIFY/YTS movie subtitles | No |
 | `tvsubtitles` | TVsubtitles.net for TV series | No |
 | `betaseries` | French/English subtitles | Yes (server-side) |
+| `animetosho` | Anime subtitles from embedded MKV tracks (AnimeTosho.org) | No (but `ANIDB_CLIENT` needed for TV episodes) |
 
 ### Wyzie Sources
 

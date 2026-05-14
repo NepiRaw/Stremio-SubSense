@@ -12,6 +12,8 @@ const express = require('express');
 const { log } = require('./src/utils');
 const { preloadParser } = require('./src/utils/filenameMatcher');
 const { initWyzieSources } = require('./src/providers/WyzieProvider');
+const { init: initAnimeLists } = require('./src/utils/animeLists');
+const { initAnidbCache, isAnidbConfigured } = require('./src/utils/anidbApi');
 
 const { registerDefaultProviders } = require('./src/providers');
 const { warmupResponseCache } = require('./src/handlers/subtitles');
@@ -59,11 +61,23 @@ async function bootstrap() {
         );
     }
     registerDefaultProviders();
-    await Promise.allSettled([
+
+    const initTasks = [
         initWyzieSources().catch((err) => log('warn', `[server] Wyzie init failed: ${err.message}`)),
+        initAnimeLists().catch((err) => log('warn', `[server] AnimeLists init failed: ${err.message}`)),
         preloadParser().catch((err) => log('warn', `[server] parser preload failed: ${err.message}`)),
         warmupResponseCache().catch((err) => log('warn', `[server] cache warmup failed: ${err.message}`))
-    ]);
+    ];
+
+    if (isAnidbConfigured()) {
+        initTasks.push(
+            initAnidbCache(db).catch((err) => log('warn', `[server] AniDB cache init failed: ${err.message}`))
+        );
+    } else {
+        log('info', '[server] AniDB not configured (ANIDB_CLIENT / ANIDB_CLIENT_VER not set) — AnimeTosho TV episode search disabled, movies still available');
+    }
+
+    await Promise.allSettled(initTasks);
 
     const server = app.listen(PORT, HOST, () => {
         log('info', `[server] listening on http://${HOST}:${PORT}`);
