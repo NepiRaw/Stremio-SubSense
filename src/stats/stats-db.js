@@ -171,20 +171,25 @@ class StatsDBAsync {
         const failure = data.success ? 0 : 1;
         const responseMs = data.responseMs || 0;
         const subsCount = data.subtitlesCount || 0;
+        const hadResults = subsCount > 0 ? 1 : 0;
+        const now = new Date().toISOString();
         try {
             await db.execute(`
                 INSERT INTO provider_stats
-                    (provider_name, date, total_requests, successful_requests, failed_requests, avg_response_ms, subtitles_returned)
-                VALUES (?, ?, 1, ?, ?, ?, ?)
+                    (provider_name, date, total_requests, successful_requests, failed_requests, avg_response_ms, subtitles_returned, requests_with_results, last_success_at)
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(provider_name, date) DO UPDATE SET
                     total_requests = total_requests + 1,
                     successful_requests = successful_requests + ?,
                     failed_requests = failed_requests + ?,
                     avg_response_ms = (avg_response_ms * total_requests + ?) / (total_requests + 1),
-                    subtitles_returned = subtitles_returned + ?
+                    subtitles_returned = subtitles_returned + ?,
+                    requests_with_results = COALESCE(requests_with_results, 0) + ?,
+                    last_success_at = CASE WHEN ? > 0 THEN ? ELSE last_success_at END
             `, [
-                data.providerName, today, success, failure, responseMs, subsCount,
-                success, failure, responseMs, subsCount
+                data.providerName, today, success, failure, responseMs, subsCount, hadResults, hadResults > 0 ? now : null,
+                success, failure, responseMs, subsCount, hadResults,
+                hadResults, now
             ]);
         } catch (err) {
             log('error', `[StatsDB] recordProviderStats error: ${err.message}`);
@@ -200,7 +205,14 @@ class StatsDBAsync {
                        SUM(failed_requests) as failed_requests,
                        ROUND(AVG(avg_response_ms)) as avg_response_ms,
                        SUM(subtitles_returned) as subtitles_returned,
-                       ROUND(SUM(successful_requests) * 100.0 / NULLIF(SUM(total_requests), 0), 1) as success_rate
+                       SUM(requests_with_results) as requests_with_results,
+                       SUM(CASE WHEN requests_with_results IS NOT NULL THEN successful_requests ELSE 0 END) as tracked_requests,
+                       MAX(last_success_at) as last_success_at,
+                       ROUND(SUM(successful_requests) * 100.0 / NULLIF(SUM(total_requests), 0), 1) as success_rate,
+                       ROUND(
+                           SUM(requests_with_results) * 100.0 /
+                           NULLIF(SUM(CASE WHEN requests_with_results IS NOT NULL THEN successful_requests ELSE 0 END), 0)
+                       , 1) as matching_rate
                 FROM provider_stats
                 WHERE date >= date('now', '-' || ? || ' days')
                 GROUP BY provider_name

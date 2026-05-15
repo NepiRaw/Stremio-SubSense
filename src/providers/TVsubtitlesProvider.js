@@ -104,7 +104,7 @@ class TVsubtitlesProvider extends BaseProvider {
         if (this._showIdCache.has(seriesName)) return this._showIdCache.get(seriesName);
 
         try {
-            const response = await fetch(`${BASE_URL}/search.php`, {
+            const response = await fetch(`${BASE_URL}/search1.php`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',

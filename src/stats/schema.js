@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS provider_stats (
     failed_requests INTEGER DEFAULT 0,
     avg_response_ms INTEGER DEFAULT 0,
     subtitles_returned INTEGER DEFAULT 0,
+    requests_with_results INTEGER,
+    last_success_at TEXT,
     UNIQUE(provider_name, date)
 );
 
@@ -132,4 +134,14 @@ CREATE TABLE IF NOT EXISTS cache_stats_summary (
 INSERT OR IGNORE INTO cache_stats_summary (id) VALUES (1);
 `;
 
-module.exports = { MINIMAL_SCHEMA, FULL_SCHEMA };
+/**
+ * Migrations for existing databases.
+ * Each migration is an ALTER TABLE that may fail if already applied (safe to re-run).
+ */
+const MIGRATIONS = [
+    `ALTER TABLE provider_stats ADD COLUMN requests_with_results INTEGER`,
+    `ALTER TABLE provider_stats ADD COLUMN last_success_at TEXT`,
+    `UPDATE provider_stats SET requests_with_results = NULL WHERE subtitles_returned > 0 AND requests_with_results = 0 AND last_success_at IS NULL`
+];
+
+module.exports = { MINIMAL_SCHEMA, FULL_SCHEMA, MIGRATIONS };

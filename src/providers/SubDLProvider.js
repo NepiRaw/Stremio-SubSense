@@ -130,11 +130,17 @@ class SubDLProvider extends BaseProvider {
     }
 
     _matchesEpisode(sub, season, episode) {
-        if (sub.full_season === true) return true;
-
         const subEpisode = sub.episode === '' || sub.episode == null ? null : Number(sub.episode);
         const subFrom = sub.episode_from === '' || sub.episode_from == null ? null : Number(sub.episode_from);
         const subEnd = sub.episode_end === '' || sub.episode_end == null ? null : Number(sub.episode_end);
+
+        if (sub.full_season === true) {
+            // SubDL sometimes marks partial zips as full_season; verify range if available
+            if (subFrom != null && subEnd != null && subEnd > 0) {
+                if (episode < subFrom || episode > subEnd) return false;
+            }
+            return true;
+        }
 
         if (subEpisode === null && subFrom === null) return true;
 

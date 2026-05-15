@@ -9,7 +9,8 @@
  *   ?q=X         — keyword search (fallback)
  *   ?show=torrent&id=X — full torrent detail with file attachments
  *
- * No API key required. No known rate limits.
+ * Rate limit: ~1 request per 2.4s per IP for detail fetches.
+ * Uses a global sequential queue to respect rate limits across all callers.
  */
 
 const { log } = require('../utils');
@@ -18,6 +19,28 @@ const FEED_URL = 'https://feed.animetosho.org/json';
 const STORAGE_URL = 'https://storage.animetosho.org/attach';
 const FETCH_TIMEOUT_MS = 15000;
 const USER_AGENT = 'SubSense-Stremio/2.0';
+const RATE_LIMIT_MS = 2500; // minimum ms between detail requests
+
+/**
+ * Global sequential queue for rate-limited detail requests.
+ * Ensures only one detail fetch runs at a time with minimum spacing.
+ */
+let detailQueue = Promise.resolve();
+let lastDetailTime = 0;
+
+function enqueueDetailFetch(torrentId) {
+    const task = detailQueue.then(async () => {
+        const now = Date.now();
+        const elapsed = now - lastDetailTime;
+        if (elapsed < RATE_LIMIT_MS) {
+            await new Promise(r => setTimeout(r, RATE_LIMIT_MS - elapsed));
+        }
+        lastDetailTime = Date.now();
+        return _fetchTorrentDetail(torrentId);
+    });
+    detailQueue = task.catch(() => {});
+    return task;
+}
 
 /**
  * Search by AniDB episode ID — returns entries for ONE specific episode.
@@ -38,6 +61,7 @@ async function searchByAnidbId(anidbId) {
 
 /**
  * Get full torrent details including file attachments (subtitles, fonts).
+ * Queued to respect AnimeTosho's rate limit (~1 req/2.4s).
  *
  * Response shape:
  *   { ..., files: [{ filename, size, attachments: [{ id, type, info, size }] }] }
@@ -45,7 +69,11 @@ async function searchByAnidbId(anidbId) {
  * attachment.type: "subtitle" | "font" | "chapter" | ...
  * attachment.info: { lang, codec, name, tracknum } (for subtitles)
  */
-async function getTorrentDetail(torrentId) {
+function getTorrentDetail(torrentId) {
+    return enqueueDetailFetch(torrentId);
+}
+
+async function _fetchTorrentDetail(torrentId) {
     try {
         const response = await fetch(`${FEED_URL}?show=torrent&id=${torrentId}`, {
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

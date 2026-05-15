@@ -16,7 +16,7 @@
  */
 
 const db = require('../cache/database-libsql');
-const { MINIMAL_SCHEMA, FULL_SCHEMA } = require('./schema');
+const { MINIMAL_SCHEMA, FULL_SCHEMA, MIGRATIONS } = require('./schema');
 const StatsDBAsync = require('./stats-db');
 const statsService = require('./stats-service');
 const { log } = require('../../src/utils');
@@ -144,6 +144,12 @@ async function initStats() {
     const schemaSQL = STATS_MODE === 'full' ? FULL_SCHEMA : MINIMAL_SCHEMA;
     try {
         await db.executeMultiple(schemaSQL);
+        // Run migrations for existing databases (safe to re-run)
+        if (STATS_MODE === 'full' && MIGRATIONS && MIGRATIONS.length > 0) {
+            for (const sql of MIGRATIONS) {
+                try { await db.execute(sql); } catch (_) { /* column already exists */ }
+            }
+        }
         log('info', `[stats] mode=${STATS_MODE} - tables created (refresh=${STATS_REFRESH_INTERVAL}ms)`);
     } catch (err) {
         log('error', `[stats] schema init failed: ${err.message}`);
