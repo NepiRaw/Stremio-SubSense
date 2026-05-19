@@ -101,6 +101,10 @@ function parseConfig(config, context = {}) {
         result.subdlApiKey = config.subdlApiKey;
     }
 
+    if (config.wyzieApiKey) {
+        result.wyzieApiKey = config.wyzieApiKey;
+    }
+
     if (config.keepAss) result.keepAss = true;
 
     return result;

@@ -24,6 +24,8 @@ let subsourceApiKey = '';
 let subsourceApiKeyValid = false;
 let subdlApiKey = '';
 let subdlApiKeyValid = false;
+let wyzieApiKey = '';
+let wyzieApiKeyValid = false;
 
 const container = document.getElementById('multiselectContainer');
 const inputWrapper = document.getElementById('inputWrapper');
@@ -59,9 +61,74 @@ const toggleSubdlKeyVisibility = document.getElementById('toggleSubdlKeyVisibili
 const testSubdlKeyBtn = document.getElementById('testSubdlKey');
 const subdlApiStatus = document.getElementById('subdlApiStatus');
 
+// Wyzie API Key elements
+const wyzieApiKeyInput = document.getElementById('wyzieApiKey');
+const toggleWyzieKeyVisibility = document.getElementById('toggleWyzieKeyVisibility');
+const testWyzieKeyBtn = document.getElementById('testWyzieKey');
+const wyzieApiStatus = document.getElementById('wyzieApiStatus');
+
 // Optional Sources expandable section
 const optionalSourcesSection = document.getElementById('optionalSourcesSection');
 const optionalSourcesToggle = document.getElementById('optionalSourcesToggle');
+
+// Active Sources Summary
+const activeSourcesGrid = document.getElementById('activeSourcesGrid');
+
+// Source definitions for the dynamic summary
+const DEFAULT_SOURCES = [
+    { name: 'OpenSubtitles', icon: '/providers/opensubtitles.ico' },
+    { name: 'YIFY', icon: '/providers/yify.ico' },
+    { name: 'BetaSeries', icon: '/providers/betaseries.ico' },
+    { name: 'AnimeTosho', icon: '/providers/animetosho.ico' },
+    { name: 'TVsubtitles', icon: '/providers/tvsubtitles.ico' }
+];
+
+const API_KEY_SOURCES = {
+    subdl: { name: 'SubDL', icon: '/providers/subdl.png' },
+    subsource: { name: 'SubSource', icon: '/providers/subsource.png' },
+    wyzie: [
+        { name: 'Subf2m', icon: '/providers/subf2m.png' },
+        { name: 'Gestdown', icon: '/providers/gestdown.png' },
+        { name: 'Kitsunekko', icon: '/providers/kitsunekko.png' }
+    ]
+};
+
+function renderActiveSourcesSummary() {
+    if (!activeSourcesGrid) return;
+    const chips = [];
+
+    // Always-on sources
+    for (const src of DEFAULT_SOURCES) {
+        chips.push(createSourceChip(src.name, src.icon, false));
+    }
+
+    // Conditional: Wyzie user key unlocks pro sources
+    if (wyzieApiKeyValid) {
+        for (const src of API_KEY_SOURCES.wyzie) {
+            chips.push(createSourceChip(src.name, src.icon, true));
+        }
+    }
+
+    // Conditional: SubDL
+    if (subdlApiKeyValid) {
+        chips.push(createSourceChip(API_KEY_SOURCES.subdl.name, API_KEY_SOURCES.subdl.icon, true));
+    }
+
+    // Conditional: SubSource
+    if (subsourceApiKeyValid) {
+        chips.push(createSourceChip(API_KEY_SOURCES.subsource.name, API_KEY_SOURCES.subsource.icon, true));
+    }
+
+    activeSourcesGrid.innerHTML = '';
+    chips.forEach(chip => activeSourcesGrid.appendChild(chip));
+}
+
+function createSourceChip(name, icon, isApiSource) {
+    const chip = document.createElement('span');
+    chip.className = 'source-chip' + (isApiSource ? ' api-source' : '');
+    chip.innerHTML = `<img src="${icon}" alt="${name}"><span>${name}</span>`;
+    return chip;
+}
 
 async function fetchLanguages() {
     try {
@@ -78,19 +145,123 @@ async function fetchLanguages() {
     }
 }
 
+async function loadConfigFromUrl() {
+    const path = window.location.pathname;
+    const match = path.match(/^\/([a-z0-9]{8})-(.+)\/configure$/i);
+    if (!match) return null;
+
+    const configString = match[2];
+    let config = null;
+
+    try {
+        config = JSON.parse(decodeURIComponent(configString));
+    } catch (_) {}
+
+    if (!config) {
+        try {
+            const decoded = atob(configString);
+            if (decoded && decoded[0] === '{') {
+                config = JSON.parse(decoded);
+            }
+        } catch (_) {}
+    }
+
+    if (!config) {
+        try {
+            const res = await fetch('/api/config/decode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ configString })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                config = data.config;
+            }
+        } catch (_) {}
+    }
+
+    return config;
+}
+
+function applyUrlConfig(config) {
+    if (!config) return;
+
+    if (Array.isArray(config.languages) && config.languages.length > 0) {
+        selectedLanguages = [];
+        document.querySelectorAll('.multi-select-chip').forEach(c => c.remove());
+
+        for (const lang of config.languages) {
+            const found = LANGUAGES.find(l => l.code === lang || l.code === lang.substring(0, 2));
+            if (found && !selectedLanguages.includes(found.code)) {
+                selectedLanguages.push(found.code);
+                addChip(found.code);
+            }
+        }
+        saveLanguagesToStorage();
+    }
+
+    if (typeof config.maxSubtitles === 'number' && config.maxSubtitles >= 0) {
+        selectedMaxSubtitles = config.maxSubtitles;
+        updateMaxSubtitlesUI(config.maxSubtitles);
+        saveMaxSubtitlesToStorage();
+    }
+
+    if (config.keepAss) {
+        keepAss = true;
+        const el = document.getElementById('keepAssToggle');
+        if (el) el.checked = true;
+        try { localStorage.setItem(KEEP_ASS_STORAGE_KEY, 'true'); } catch (_) {}
+    }
+
+    if (config.subsourceApiKey) {
+        const input = document.getElementById('subsourceApiKey');
+        if (input) {
+            input.value = config.subsourceApiKey;
+            validateSubsourceApiKey(config.subsourceApiKey, true);
+        }
+    }
+    if (config.subdlApiKey) {
+        const input = document.getElementById('subdlApiKey');
+        if (input) {
+            input.value = config.subdlApiKey;
+            validateSubdlApiKey(config.subdlApiKey, true);
+        }
+    }
+    if (config.wyzieApiKey) {
+        const input = document.getElementById('wyzieApiKey');
+        if (input) {
+            input.value = config.wyzieApiKey;
+            validateWyzieApiKey(config.wyzieApiKey, true);
+        }
+    }
+
+    if (config.subsourceApiKey || config.subdlApiKey || config.wyzieApiKey) {
+        if (optionalSourcesSection) optionalSourcesSection.classList.add('expanded');
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     await Promise.all([
         fetchLanguages(),
         fetchVersion()
     ]);
-    restoreSavedLanguages();
-    restoreSavedMaxSubtitles();
-    restoreSavedKeepAss();
+
+    const urlConfig = await loadConfigFromUrl();
+    if (urlConfig) {
+        applyUrlConfig(urlConfig);
+    } else {
+        restoreSavedLanguages();
+        restoreSavedMaxSubtitles();
+        restoreSavedKeepAss();
+    }
+
     initSubsourceApiKey();
     initSubdlApiKey();
+    initWyzieApiKey();
     renderOptions();
     setupEventListeners();
     updateInstallButtonState();
+    renderActiveSourcesSummary();
 });
 
 function saveLanguagesToStorage() {
@@ -566,7 +737,7 @@ async function installAddon() {
     installDropdownToggle.disabled = true;
     
     // Use async version if API keys are configured
-    const stremioUrl = (subsourceApiKeyValid || subdlApiKeyValid) ? 
+    const stremioUrl = (subsourceApiKeyValid || subdlApiKeyValid || wyzieApiKeyValid) ? 
         await getStremioUrlWithApiKeys() : 
         getStremioUrl();
     
@@ -589,7 +760,7 @@ async function copyManifestUrl() {
     }
     
     // Use async version if API keys are configured
-    const url = (subsourceApiKeyValid || subdlApiKeyValid) ? 
+    const url = (subsourceApiKeyValid || subdlApiKeyValid || wyzieApiKeyValid) ? 
         await getManifestUrlWithApiKeys() : 
         getManifestUrl();
     
@@ -718,6 +889,7 @@ async function validateSubsourceApiKey(apiKey, silent = false) {
     } finally {
         if (testSubsourceKeyBtn) testSubsourceKeyBtn.disabled = false;
         updateSubsourceSourceVisibility();
+        renderActiveSourcesSummary();
     }
 }
 
@@ -753,8 +925,11 @@ async function getEncryptedConfig() {
     if (subdlApiKey && subdlApiKeyValid) {
         config.subdlApiKey = subdlApiKey;
     }
+    if (wyzieApiKey && wyzieApiKeyValid) {
+        config.wyzieApiKey = wyzieApiKey;
+    }
     
-    if (config.subsourceApiKey || config.subdlApiKey) {
+    if (config.subsourceApiKey || config.subdlApiKey || config.wyzieApiKey) {
         try {
             const response = await fetch('/api/config/encrypt', {
                 method: 'POST',
@@ -859,6 +1034,7 @@ async function validateSubdlApiKey(apiKey, silent = false) {
         if (!silent) showToast('Failed to validate API key', 'error');
     } finally {
         if (testSubdlKeyBtn) testSubdlKeyBtn.disabled = false;
+        renderActiveSourcesSummary();
     }
 }
 
@@ -872,4 +1048,99 @@ function updateSubdlStatus(status, message) {
 function setSubdlTestButtonBreathing(enabled) {
     if (!testSubdlKeyBtn) return;
     testSubdlKeyBtn.classList.toggle('breathing', enabled);
+}
+
+// ===== Wyzie API Key Functions =====
+
+function initWyzieApiKey() {
+    if (toggleWyzieKeyVisibility) {
+        toggleWyzieKeyVisibility.addEventListener('click', () => {
+            const isPassword = wyzieApiKeyInput.type === 'password';
+            wyzieApiKeyInput.type = isPassword ? 'text' : 'password';
+            const eyeIcon = document.getElementById('wyzieEyeIcon');
+            if (eyeIcon) {
+                const pathEl = eyeIcon.querySelector('path');
+                if (pathEl) {
+                    pathEl.setAttribute('d', isPassword ? EYE_CLOSED_PATH : EYE_OPEN_PATH);
+                }
+            }
+        });
+    }
+
+    if (testWyzieKeyBtn) {
+        testWyzieKeyBtn.addEventListener('click', () => {
+            const key = wyzieApiKeyInput.value.trim();
+            if (key) {
+                validateWyzieApiKey(key, false);
+            } else {
+                updateWyzieStatus('unconfigured', 'Enter an API key to enable Wyzie');
+            }
+        });
+    }
+
+    if (wyzieApiKeyInput) {
+        wyzieApiKeyInput.addEventListener('input', () => {
+            const key = wyzieApiKeyInput.value.trim();
+            if (!key) {
+                wyzieApiKey = '';
+                wyzieApiKeyValid = false;
+                updateWyzieStatus('unconfigured', 'Enter an API key to enable Wyzie');
+                setWyzieTestButtonBreathing(false);
+            } else if (!wyzieApiKeyValid || key !== wyzieApiKey) {
+                wyzieApiKeyValid = false;
+                updateWyzieStatus('pending', 'Click Test to validate your API key');
+                setWyzieTestButtonBreathing(true);
+            }
+        });
+    }
+}
+
+async function validateWyzieApiKey(apiKey, silent = false) {
+    if (!silent) {
+        updateWyzieStatus('testing', 'Validating API key...');
+        if (testWyzieKeyBtn) testWyzieKeyBtn.disabled = true;
+        setWyzieTestButtonBreathing(false);
+    }
+
+    try {
+        const response = await fetch('/api/wyzie/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey })
+        });
+        const result = await response.json();
+
+        if (result.valid) {
+            wyzieApiKey = apiKey;
+            wyzieApiKeyValid = true;
+            const info = result.remaining !== undefined ? ` (${result.remaining}/${result.limit} remaining)` : '';
+            updateWyzieStatus('valid', `Valid ${result.keyType} key${info}`);
+            if (!silent) showToast('Wyzie API key validated!');
+        } else {
+            wyzieApiKey = '';
+            wyzieApiKeyValid = false;
+            updateWyzieStatus('invalid', result.error || 'Invalid API key');
+            if (!silent) showToast(result.error || 'Invalid API key', 'error');
+        }
+    } catch (error) {
+        wyzieApiKey = '';
+        wyzieApiKeyValid = false;
+        updateWyzieStatus('invalid', 'Unable to reach validation service');
+        if (!silent) showToast('Unable to reach validation service', 'error');
+    } finally {
+        if (testWyzieKeyBtn) testWyzieKeyBtn.disabled = false;
+        renderActiveSourcesSummary();
+    }
+}
+
+function updateWyzieStatus(status, message) {
+    if (!wyzieApiStatus) return;
+    wyzieApiStatus.className = `api-status ${status}`;
+    const statusText = wyzieApiStatus.querySelector('.status-text');
+    if (statusText) statusText.textContent = message;
+}
+
+function setWyzieTestButtonBreathing(enabled) {
+    if (!testWyzieKeyBtn) return;
+    testWyzieKeyBtn.classList.toggle('breathing', enabled);
 }

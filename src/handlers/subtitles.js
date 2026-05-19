@@ -36,6 +36,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const filename = (args.extra && args.extra.filename) || null;
     const apiKey = parsedConfig.subsourceApiKey || null;
     const subdlApiKey = parsedConfig.subdlApiKey || null;
+    const wyzieApiKey = parsedConfig.wyzieApiKey || null;
     const encryptedApiKey = apiKey && encryptConfig
         ? safeEncrypt({ apiKey })
         : null;
@@ -81,7 +82,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
             episode: parsed.episode,
             languages: wyzieLanguages,
             filename,
-            apiKeys: { subsource: apiKey, subdl: subdlApiKey },
+            apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
         },
         { dedupeKey: cacheKey }
@@ -183,6 +184,7 @@ function mergeFormatted(existing, extra) {
 
 function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey, requestContext) {
     const subdlApiKey = parsedConfig.subdlApiKey || null;
+    const wyzieApiKey = parsedConfig.wyzieApiKey || null;
     setImmediate(() => {
         providerManager.searchAll({
             imdbId: parsed.imdbId,
@@ -190,7 +192,7 @@ function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filena
             episode: parsed.episode,
             languages: wyzieLanguages,
             filename,
-            apiKeys: { subsource: apiKey, subdl: subdlApiKey },
+            apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
         }, { dedupeKey: `${cacheKey}:refresh` })
             .then((res) => {
