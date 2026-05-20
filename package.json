@@ -31,12 +31,12 @@
     "guessit-js": "^3.9.0",
     "iconv-lite": "^0.7.1",
     "node-unrar-js": "^2.0.2",
+    "lzma-native": "^8.0.6",
     "stremio-addon-sdk": "^1.6.10",
     "subsrt-ts": "^2.1.2",
     "ytssubs": "^1.0.2"
   },
   "devDependencies": {
-    "lzma-native": "^8.0.6",
     "nodemon": "^3.0.2"
   }
 }
