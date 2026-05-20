@@ -95,8 +95,56 @@ class SubtitleCache {
     }
 
     /**
+     * Language-agnostic lookup: fetch ALL non-expired rows for a given content,
+     * merge subtitles, deduplicate by ID, and filter by requested languages.
+     * Used as L2 fallback when L1 misses (serves any lang combination from cached data).
+     */
+    async getByContent(imdbId, season, episode, languages) {
+        try {
+            const result = await db.execute(`
+                SELECT subtitles, (strftime('%s','now') - updated_at) AS age_seconds
+                FROM subtitle_cache
+                WHERE imdb_id = ? AND season = ? AND episode = ?
+                  AND updated_at > (strftime('%s','now') - ?)
+                ORDER BY updated_at DESC
+            `, [imdbId, season || 0, episode || 0, this.ttlSeconds]);
+
+            if (result.rows.length === 0) return null;
+
+            const langSet = new Set(languages.map(l => l.toLowerCase()));
+            const seenIds = new Set();
+            const merged = [];
+            let minAge = Infinity;
+
+            for (const row of result.rows) {
+                const age = Number(row.age_seconds) || 0;
+                if (age < minAge) minAge = age;
+
+                let subs;
+                try {
+                    subs = JSON.parse(row.subtitles);
+                } catch { continue; }
+                if (!Array.isArray(subs)) continue;
+
+                for (const sub of subs) {
+                    if (!sub.id || seenIds.has(sub.id)) continue;
+                    if (sub.lang && langSet.has(sub.lang.toLowerCase())) {
+                        seenIds.add(sub.id);
+                        merged.push(sub);
+                    }
+                }
+            }
+
+            if (merged.length === 0) return null;
+            return { subtitles: merged, ageSeconds: minAge };
+        } catch (err) {
+            log('error', `[L2] getByContent failed: ${err.message}`);
+            return null;
+        }
+    }
+
+    /**
      * Stream non-expired rows for cold-start warmup (capped at 2000 most recent).
-     * @returns {Promise<Array<{key: string, subtitles: any[]}>>}
      */
     async loadAllForWarmup() {
         try {
