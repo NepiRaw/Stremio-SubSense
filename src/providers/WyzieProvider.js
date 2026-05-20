@@ -129,7 +129,13 @@ class WyzieKeyPool {
                 const s = this.state.get(key) || {};
                 s.sources = sources;
                 this.state.set(key, s);
-                log('info', `[WyzieKeyPool] Key ${key.slice(0, 12)}...: ${sources.length} sources available`);
+                const keyType = s.keyType || 'unknown';
+                const isFree = keyType === 'free' || keyType === 'free-verified' || keyType === 'dev';
+                const freeSrcs = Array.isArray(data?.free) ? data.free : _cachedFreeSources || [];
+                const usable = isFree && freeSrcs.length > 0
+                    ? sources.filter(src => freeSrcs.includes(src))
+                    : sources;
+                log('info', `[WyzieKeyPool] Key ${key.slice(0, 12)}...: ${usable.length} usable sources (${usable.join(', ')})`);
             }
             return sources;
         } catch (err) {
@@ -194,18 +200,39 @@ const SOURCE_METADATA = {
     'kitsunekko':    { display: 'Kitsunekko',    icon: 'kitsunekko.png',    url: 'https://kitsunekko.net' },
     'yify':          { display: 'YIFY',           icon: 'yify.ico',          url: 'https://yts-subs.com' },
     'ajatttools':    { display: 'AjattTools',     icon: null,                url: null },
-    'tvsubtitles':   { display: 'TVsubtitles',    icon: 'tvsubtitles.png',   url: 'https://www.tvsubtitles.net' }
+    'tvsubtitles':   { display: 'TVsubtitles',    icon: 'tvsubtitles.png',   url: 'https://www.tvsubtitles.net' },
+    'ai':            { display: 'AI',             icon: null,                url: null }
 };
 
-const FREE_SOURCES = 'opensubtitles,tvsubtitles';
+// Codename → real source name mapping (Wyzie API returns NATO codenames in search results)
+// Inferred from /api/status capabilities + /sources tiers:
+//   charlie (free, movies+TV) = opensubtitles
+//   kilo (free, TV only) = tvsubtitles
+//   india (paid, movies only) = yify
+//   hotel (paid, TV only) = gestdown
+//   bravo (paid, movies+TV) = subf2m
+//   golf (paid, movies+TV) = kitsunekko
+const SOURCE_CODENAME_MAP = {
+    'charlie': 'opensubtitles',
+    'kilo':    'tvsubtitles',
+    'india':   'yify',
+    'hotel':   'gestdown',
+    'bravo':   'subf2m',
+    'golf':    'kitsunekko',
+    'ai':      'ai'
+};
+
+const FALLBACK_FREE_SOURCES = 'opensubtitles,tvsubtitles';
 
 const FALLBACK_SOURCES = [
-    'subf2m', 'opensubtitles', 'animetosho',
-    'jimaku', 'kitsunekko', 'gestdown', 'yify',
-    'ajatttools', 'tvsubtitles'
+    'subf2m', 'opensubtitles', 'kitsunekko',
+    'gestdown', 'yify', 'tvsubtitles'
 ];
 
 let _cachedSources = null;
+let _cachedFreeSources = null;   // string[] from API "free" field
+let _cachedPaidSources = null;   // string[] from API "paid" field
+let _cachedTiered = null;        // [{key, name, tier}] from API "tiered" field
 let _refreshTimer = null;
 
 function getSourcesForKeyType(keyType) {
@@ -214,8 +241,18 @@ function getSourcesForKeyType(keyType) {
         case 'dev':
             return getActiveSources().join(',');
         default:
-            return FREE_SOURCES;
+            return getFreeSources();
     }
+}
+
+/**
+ * Returns comma-separated free sources string (from API or fallback)
+ */
+function getFreeSources() {
+    if (_cachedFreeSources && _cachedFreeSources.length > 0) {
+        return _cachedFreeSources.join(',');
+    }
+    return FALLBACK_FREE_SOURCES;
 }
 
 async function fetchWyzieSources() {
@@ -233,7 +270,21 @@ async function fetchWyzieSources() {
         }
         const data = await response.json();
         if (!data || !Array.isArray(data.sources) || data.sources.length === 0) return null;
-        return data.sources.filter(s => typeof s === 'string' && s.length > 0).map(s => s.toLowerCase());
+
+        const sources = data.sources.filter(s => typeof s === 'string' && s.length > 0).map(s => s.toLowerCase());
+
+        // Store free/paid tier info from API
+        if (Array.isArray(data.free) && data.free.length > 0) {
+            _cachedFreeSources = data.free.map(s => s.toLowerCase());
+        }
+        if (Array.isArray(data.paid) && data.paid.length > 0) {
+            _cachedPaidSources = data.paid.map(s => s.toLowerCase());
+        }
+        if (Array.isArray(data.tiered) && data.tiered.length > 0) {
+            _cachedTiered = data.tiered;
+        }
+
+        return sources;
     } catch (error) {
         log('warn', `[WyzieSources] Failed to fetch: ${error.message}`);
         return null;
@@ -251,8 +302,11 @@ function getActiveSources() {
 }
 
 function getSourceDisplayName(source) {
-    const meta = SOURCE_METADATA[source.toLowerCase()];
-    return meta ? meta.display : source.charAt(0).toUpperCase() + source.slice(1);
+    const key = source.toLowerCase();
+    const resolved = SOURCE_CODENAME_MAP[key];
+    const lookupKey = resolved || key;
+    const meta = SOURCE_METADATA[lookupKey];
+    return meta ? meta.display : lookupKey.charAt(0).toUpperCase() + lookupKey.slice(1);
 }
 
 function getActiveSourcesMetadata() {
@@ -274,6 +328,8 @@ async function initWyzieSources() {
     if (sources) {
         _cachedSources = sources;
         log('info', `[WyzieSources] Loaded ${sources.length} sources: ${sources.join(', ')}`);
+        if (_cachedFreeSources) log('info', `[WyzieSources] Free: ${_cachedFreeSources.join(', ')}`);
+        if (_cachedPaidSources) log('info', `[WyzieSources] Paid: ${_cachedPaidSources.join(', ')}`);
     } else {
         _cachedSources = [...FALLBACK_SOURCES];
         log('warn', `[WyzieSources] Using ${FALLBACK_SOURCES.length} fallback sources`);
@@ -505,9 +561,9 @@ class WyzieProvider extends BaseProvider {
             }
             this._keyTypeCache.set(apiKey, keyType);
         }
-        // Free keys: restricted to 2 providers (server-side enforced by Wyzie)
-        if (keyType === 'free' || keyType === 'free-verified') {
-            return FREE_SOURCES;
+        // Free/dev keys: restricted to free-tier providers (dynamic from API)
+        if (keyType === 'free' || keyType === 'free-verified' || keyType === 'dev') {
+            return getFreeSources();
         }
         // Pro/Dev: use dynamic sources list from API (all available sources)
         const dynamicSources = this.keyPool.getSources(apiKey);
@@ -579,6 +635,13 @@ class WyzieProvider extends BaseProvider {
     _normalizeResult(sub) {
         let source = 'unknown';
         if (sub.source) source = Array.isArray(sub.source) ? sub.source[0] : sub.source;
+        const resolved = SOURCE_CODENAME_MAP[source.toLowerCase()];
+        if (resolved) {
+            source = resolved;
+        } else if (source !== 'unknown' && !SOURCE_METADATA[source.toLowerCase()]) {
+            // Unknown codename — not in our map and not a known source name
+            log('warn', `[WyzieProvider] Unknown source codename: "${source}" — add to SOURCE_CODENAME_MAP`);
+        }
 
         const langCode = sub.lang || sub.language || 'und';
         const language = langCode.substring(0, 2).toLowerCase();

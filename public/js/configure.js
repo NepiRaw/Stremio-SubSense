@@ -200,11 +200,10 @@ function applyUrlConfig(config) {
         saveLanguagesToStorage();
     }
 
-    if (typeof config.maxSubtitles === 'number' && config.maxSubtitles >= 0) {
-        selectedMaxSubtitles = config.maxSubtitles;
-        updateMaxSubtitlesUI(config.maxSubtitles);
-        saveMaxSubtitlesToStorage();
-    }
+    const maxSubs = typeof config.maxSubtitles === 'number' ? config.maxSubtitles : 0;
+    selectedMaxSubtitles = maxSubs;
+    updateMaxSubtitlesUI(maxSubs);
+    saveMaxSubtitlesToStorage();
 
     if (config.keepAss) {
         keepAss = true;
@@ -911,12 +910,9 @@ function updateSubsourceSourceVisibility() {
 
 async function getEncryptedConfig() {
     const config = {
-        languages: selectedLanguages
+        languages: selectedLanguages,
+        maxSubtitles: selectedMaxSubtitles
     };
-    
-    if (selectedMaxSubtitles > 0) {
-        config.maxSubtitles = selectedMaxSubtitles;
-    }
     if (keepAss) config.keepAss = true;
     
     if (subsourceApiKey && subsourceApiKeyValid) {

@@ -234,6 +234,14 @@ async function warmupResponseCache() {
 
         const entries = await subtitleCache.loadAllForWarmup();
         if (entries.length > 0) {
+            for (const entry of entries) {
+                const parts = entry.key.split(':');
+                if (parts.length >= 4) {
+                    const langs = parts[3].split(',');
+                    parts[3] = langs.map(l => mapStremioToWyzie(l) || l).sort().join(',');
+                    entry.key = parts.slice(0, 4).join(':');
+                }
+            }
             responseCache.warmup(entries);
             const memAfter = process.memoryUsage();
             const elapsed = Date.now() - t0;

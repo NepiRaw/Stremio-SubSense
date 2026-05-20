@@ -3,6 +3,7 @@
 const { mapStremioToWyzie, mapWyzieToStremio } = require('../../src/languages');
 const { log } = require('../../src/utils');
 const { SUBSRC_KEY_PLACEHOLDER } = require('../cache/ResponseCache');
+const { getSourceDisplayName } = require('../providers/WyzieProvider');
 
 const PROXY_BASE_URL = process.env.SUBSENSE_BASE_URL ||
     `http://127.0.0.1:${process.env.PORT || 3100}`;
@@ -143,9 +144,7 @@ function buildId(idx, fmt, provider, lang) {
 }
 
 function displayProvider(src) {
-    const s = String(src || 'Unknown');
-    if (/^[a-z0-9._-]+$/.test(s)) return s.charAt(0).toUpperCase() + s.slice(1);
-    return s;
+    return getSourceDisplayName(src || 'Unknown');
 }
 
 function slugProvider(src) {
