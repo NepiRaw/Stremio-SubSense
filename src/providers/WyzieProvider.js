@@ -195,11 +195,14 @@ const POOL_MAX_ENTRIES = parseInt(process.env.WYZIE_POOL_MAX, 10) || 5000;
 const SOURCE_METADATA = {
     'opensubtitles': { display: 'OpenSubtitles', icon: 'opensubtitles.ico', url: 'https://www.opensubtitles.com' },
     'subf2m':        { display: 'Subf2m',        icon: 'subf2m.png',        url: 'https://subf2m.co' },
+    'subdl':         { display: 'SubDL',          icon: null,                url: 'https://subdl.com' },
     'animetosho':    { display: 'AnimeTosho',    icon: 'animetosho.ico',    url: 'https://animetosho.org' },
     'gestdown':      { display: 'Gestdown',      icon: 'gestdown.png',      url: 'https://gestdown.info' },
     'jimaku':        { display: 'Jimaku',         icon: 'jimaku.png',        url: 'https://jimaku.cc' },
     'kitsunekko':    { display: 'Kitsunekko',    icon: 'kitsunekko.png',    url: 'https://kitsunekko.net' },
     'yify':          { display: 'YIFY',           icon: 'yify.ico',          url: 'https://yts-subs.com' },
+    'addic7ed':      { display: 'Addic7ed',       icon: null,                url: 'https://www.addic7ed.com' },
+    'podnapisi':     { display: 'Podnapisi',      icon: null,                url: 'https://www.podnapisi.net' },
     'ajatttools':    { display: 'AjattTools',     icon: null,                url: null },
     'tvsubtitles':   { display: 'TVsubtitles',    icon: 'tvsubtitles.png',   url: 'https://www.tvsubtitles.net' },
     'ai':            { display: 'AI',             icon: null,                url: null }
@@ -351,6 +354,8 @@ async function initWyzieSources() {
 // WyzieProvider
 // =====================================================
 
+const wyzieDump = require('./wyzie-dump');
+
 class WyzieProvider extends BaseProvider {
     constructor(options = {}) {
         super('wyzie', options);
@@ -362,6 +367,7 @@ class WyzieProvider extends BaseProvider {
 
     async initialize() {
         await this.keyPool.initialize();
+        await wyzieDump.initDumpDb().catch(() => {});
         const status = this.keyPool.getStatus();
         if (status.length > 0) {
             log('info', `[WyzieProvider] Key pool: ${status.map(s => `${s.key}(${s.type},${s.remaining}/${s.limit})`).join(', ')}`);
@@ -418,27 +424,48 @@ class WyzieProvider extends BaseProvider {
                 return { subtitles: filtered };
             }
 
+            const dumpPromise = wyzieDump.isAvailable()
+                ? wyzieDump.lookupDump(query.imdbId, query.season, query.episode, languages)
+                    .catch(() => [])
+                : Promise.resolve([]);
+
             // Select API key
             const keySelection = this._selectKey(query);
-            if (!keySelection) {
-                log('warn', '[WyzieProvider] No API key available');
-                this._recordRequest(false, Date.now() - startedAt, 0, new Error('NO_KEY'));
-                return { subtitles: [] };
-            }
+            let apiResult = { subtitles: [], backgroundPromise: null };
 
-            const { key: apiKey, isUserKey } = keySelection;
-            let result;
-
-            if (isUserKey) {
-                result = await this._searchWithUserKey(query, apiKey, languages);
+            if (keySelection) {
+                const { key: apiKey, isUserKey } = keySelection;
+                try {
+                    if (isUserKey) {
+                        apiResult = await this._searchWithUserKey(query, apiKey, languages);
+                    } else {
+                        apiResult = await this._searchWithServerKey(query, apiKey, languages);
+                    }
+                } catch (apiErr) {
+                    log('warn', `[WyzieProvider] API failed (dump fallback): ${apiErr.message}`);
+                }
             } else {
-                result = await this._searchWithServerKey(query, apiKey, languages);
+                log('warn', '[WyzieProvider] No API key available');
             }
 
-            this._recordRequest(true, Date.now() - startedAt, result.subtitles.length);
+            const dumpSubs = await dumpPromise;
+            let merged = apiResult.subtitles;
+
+            if (dumpSubs.length > 0) {
+                const existingIds = new Set(merged.map(s => s.id));
+                const dumpResults = dumpSubs
+                    .filter(s => !existingIds.has(s.id))
+                    .map(s => this._normalizeResult(s));
+                merged = [...merged, ...dumpResults];
+                log('info', `[WyzieProvider] Dump: +${dumpResults.length} subs merged (${dumpSubs.length} found, ${dumpSubs.length - dumpResults.length} dupes)`);
+
+                wyzieDump.validateUrls(dumpSubs).catch(() => {});
+            }
+
+            this._recordRequest(true, Date.now() - startedAt, merged.length);
             return {
-                subtitles: result.subtitles,
-                backgroundPromise: result.backgroundPromise || null
+                subtitles: merged,
+                backgroundPromise: apiResult.backgroundPromise || null
             };
         } catch (err) {
             this._recordRequest(false, Date.now() - startedAt, 0, err);
