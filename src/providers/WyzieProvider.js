@@ -498,8 +498,6 @@ class WyzieProvider extends BaseProvider {
             throw new Error('RATE_LIMITED');
         }
 
-        if (!response.ok) throw new Error(`API_${response.status}`);
-
         this._updateKeyFromHeaders(apiKey, response.headers);
         const results = await response.json();
         const allSubs = this._processResults(results);
@@ -543,6 +541,11 @@ class WyzieProvider extends BaseProvider {
             headers: { 'Accept': 'application/json' }
         });
         if (!response.ok && response.status !== 429) {
+            if (response.status === 400) {
+                const body = await response.json().catch(() => ({}));
+                log('info', `[WyzieProvider] HTTP ${response.status} - ${body.message || 'No subtitles found'} - ${body.details || ''}`);
+                return { ok: false, status: 400, headers: response.headers, json: async () => [] };
+            }
             throw new Error(`API_${response.status}`);
         }
         return response;
