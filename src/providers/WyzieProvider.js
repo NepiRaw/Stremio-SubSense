@@ -43,6 +43,7 @@ class WyzieKeyPool {
                 s.remaining = s.limit || 1000;
                 s.resetAt = this._nextMidnightUTC();
             }
+            if (s.remaining == null) return key;
             if (s.remaining <= 0) continue;
             if (s.remaining > bestRemaining) {
                 bestRemaining = s.remaining;
