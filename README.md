@@ -82,7 +82,7 @@ services:
       - DB_PATH=/app/data/subsense.db
 
       # --- Provider API keys ---
-      # - WYZIE_API_KEY=                       # REQUIRED for wyzie provider
+      # - WYZIE_API_KEYS=                      # REQUIRED for wyzie provider (comma-separated for multiple keys)
       # - BETASERIES_API_KEY=                  # Optional - BetaSeries (French/English)
 
       # See .env.example for the full list of options
@@ -115,7 +115,7 @@ Access your addon at `http://localhost:3100`
 | `LOG_LEVEL` | Optional | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 | `SUBSENSE_ENCRYPTION_KEY` | **Required** | — | Secret used to encrypt/decrypt user-provided provider API keys inside manifest URLs |
 | `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource,subdl,animetosho` | Comma-separated list of enabled providers |
-| `WYZIE_API_KEY` | **Required** | — | Server-side Wyzie API key. Required because Wyzie now requires a key for search and download requests |
+| `WYZIE_API_KEYS` | **Required** | — | Wyzie API key(s), comma-separated for pool rotation (get keys at https://sub.wyzie.io/redeem) |
 | `WYZIE_SOURCES` | Optional | All available sources | Override the Wyzie sources queried by the `wyzie` provider |
 | `BETASERIES_API_KEY` | Optional | — | Server-side BetaSeries API key for BetaSeries subtitle searches |
 | `ANIDB_CLIENT` | Optional | — | AniDB HTTP API client name (register at [anidb.net](https://anidb.net)). Required for AnimeTosho TV episode search |
@@ -142,9 +142,11 @@ These are the high-level providers that SubSense can use:
 
 ### Wyzie Sources
 
-These are the sources queried by the `wyzie` provider:
+These are the sources queried by the `wyzie` provider (fetched dynamically from the Wyzie API):
 
-`OpenSubtitles`, `Subdl`, `Subf2m`, `Podnapisi`, `AnimeTosho`, `Gestdown`
+`OpenSubtitles`, `Subf2m`, `Kitsunekko`, `Gestdown`, `YIFY`, `TVsubtitles`
+
+Free sources (no paid key needed): `OpenSubtitles`, `TVsubtitles`
 
 ## 📊 Stats & Monitoring
 

@@ -36,6 +36,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const filename = (args.extra && args.extra.filename) || null;
     const apiKey = parsedConfig.subsourceApiKey || null;
     const subdlApiKey = parsedConfig.subdlApiKey || null;
+    const wyzieApiKey = parsedConfig.wyzieApiKey || null;
     const encryptedApiKey = apiKey && encryptConfig
         ? safeEncrypt({ apiKey })
         : null;
@@ -74,6 +75,18 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         return { subtitles: cached.subtitles };
     }
 
+    // L2 fallback: language-agnostic lookup before hitting providers
+    const l2Hit = await subtitleCache.getByContent(parsed.imdbId, parsed.season, parsed.episode, languages);
+    if (l2Hit && l2Hit.subtitles.length > 0) {
+        responseCache.set(cacheKey, l2Hit.subtitles);
+        const l2Subs = responseCache.get(cacheKey, requestContext);
+        const returnedL2 = l2Subs ? l2Subs.subtitles : l2Hit.subtitles;
+        log('info',
+            `[handler] l2-hit ${reqTag(parsed, wyzieLanguages)} -> ${l2Hit.subtitles.length} subs (returning ${returnedL2.length}) in ${Date.now() - startedAt}ms`);
+        fireTrack(parsedConfig, parsed, languages, returnedL2, Date.now() - startedAt, true);
+        return { subtitles: returnedL2 };
+    }
+
     const result = await providerManager.searchAll(
         {
             imdbId: parsed.imdbId,
@@ -81,7 +94,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
             episode: parsed.episode,
             languages: wyzieLanguages,
             filename,
-            apiKeys: { subsource: apiKey, subdl: subdlApiKey },
+            apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
         },
         { dedupeKey: cacheKey }
@@ -183,6 +196,7 @@ function mergeFormatted(existing, extra) {
 
 function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey, requestContext) {
     const subdlApiKey = parsedConfig.subdlApiKey || null;
+    const wyzieApiKey = parsedConfig.wyzieApiKey || null;
     setImmediate(() => {
         providerManager.searchAll({
             imdbId: parsed.imdbId,
@@ -190,7 +204,7 @@ function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filena
             episode: parsed.episode,
             languages: wyzieLanguages,
             filename,
-            apiKeys: { subsource: apiKey, subdl: subdlApiKey },
+            apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
         }, { dedupeKey: `${cacheKey}:refresh` })
             .then((res) => {
@@ -232,12 +246,42 @@ async function warmupResponseCache() {
 
         const entries = await subtitleCache.loadAllForWarmup();
         if (entries.length > 0) {
-            responseCache.warmup(entries);
+            // Group by content (imdb:s:e) and merge all subs
+            const contentMap = new Map();
+            for (const entry of entries) {
+                const parts = entry.key.split(':');
+                if (parts.length < 4) continue;
+                const contentKey = parts.slice(0, 3).join(':');
+                if (!contentMap.has(contentKey)) {
+                    contentMap.set(contentKey, []);
+                }
+                const existing = contentMap.get(contentKey);
+                const existingIds = new Set(existing.map(s => s.id));
+                for (const sub of entry.subtitles) {
+                    if (sub.id && !existingIds.has(sub.id)) {
+                        existing.push(sub);
+                        existingIds.add(sub.id);
+                    }
+                }
+            }
+
+            // Create L1 entries: one per content with union of all languages
+            const warmupEntries = [];
+            for (const [contentKey, subs] of contentMap) {
+                const allLangs = new Set();
+                for (const sub of subs) {
+                    if (sub.lang) allLangs.add(mapStremioToWyzie(sub.lang) || sub.lang);
+                }
+                const langKey = Array.from(allLangs).sort().join(',');
+                warmupEntries.push({ key: `${contentKey}:${langKey}`, subtitles: subs });
+            }
+
+            responseCache.warmup(warmupEntries);
             const memAfter = process.memoryUsage();
             const elapsed = Date.now() - t0;
             const heapDeltaMB = ((memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024).toFixed(1);
             const rssDeltaMB = ((memAfter.rss - memBefore.rss) / 1024 / 1024).toFixed(1);
-            log('info', `[handler] warmed ResponseCache with ${entries.length} entries in ${elapsed}ms (heap +${heapDeltaMB}MB, rss +${rssDeltaMB}MB)`);
+            log('info', `[handler] warmed ResponseCache with ${warmupEntries.length} entries (from ${entries.length} rows) in ${elapsed}ms (heap +${heapDeltaMB}MB, rss +${rssDeltaMB}MB)`);
         } else {
             log('info', '[handler] warmup skipped: no L2 entries');
         }

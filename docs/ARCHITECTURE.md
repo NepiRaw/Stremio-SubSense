@@ -26,7 +26,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 
 **SubSense** is a Stremio addon that aggregates subtitles from multiple sources and serves them to Stremio clients. Key features:
 
-- **Multi-source aggregation**: Uses multiple providers including wyzie-lib (OpenSubtitles, SubDL, Podnapisi, Subf2m, AnimeTosho, Gestdown), BetaSeries, YIFY, and TVsubtitles
+- **Multi-source aggregation**: Uses multiple providers including Wyzie API (OpenSubtitles, Subf2m, Kitsunekko, Gestdown, YIFY, TVsubtitles), BetaSeries, YIFY, and TVsubtitles
 - **Multi-language support**: Up to 5 languages with equal priority
 - **Dual format support**: ASS subtitles converted to VTT (with styling) + SRT (fallback)
 - **Configurable limits**: User-selectable max subtitles per language
@@ -40,7 +40,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 |-----------|------------|
 | Backend Runtime | Node.js 20+ |
 | Web Framework | Express.js |
-| Subtitle Sources | wyzie-lib |
+| Subtitle Sources | Wyzie API (sub.wyzie.io) |
 | Database | SQLite (LibSQL via @libsql/client) |
 | Process Manager | PM2 |
 | Frontend | Vanilla HTML/CSS/JS |
@@ -153,7 +153,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 |------|---------|
 | `BaseProvider.js` | Abstract base class for providers |
 | `ProviderManager.js` | Provider registry and orchestration |
-| `WyzieProvider.js` | wyzie-lib integration, fast-first strategy |
+| `WyzieProvider.js` | Wyzie API integration, key pool |
 | `BetaSeriesProvider.js` | BetaSeries API integration for French/English subtitles |
 | `SubSourceProvider.js` | SubSource.net API integration (user API key required) |
 | `YIFYProvider.js` | YIFY/YTS subtitle provider (movies only) |
@@ -384,14 +384,15 @@ generateDescription(config) {
 Located in `src/providers/`
 
 **WyzieProvider** (`WyzieProvider.js`):
-Uses wyzie-lib to aggregate from multiple sources:
-- OpenSubtitles
-- SubDL
-- Subf2m
-- Podnapisi
-- AnimeTosho
-- Gestdown
-- ...
+Uses the Wyzie API (sub.wyzie.io) to aggregate from multiple sources:
+- OpenSubtitles (free)
+- TVsubtitles (free)
+- Subf2m (paid)
+- Kitsunekko (paid)
+- Gestdown (paid)
+- YIFY (paid)
+
+Features a key pool with automatic rotation (`WYZIE_API_KEYS`), dynamic source discovery from `/sources` endpoint.
 
 **BetaSeriesProvider** (`BetaSeriesProvider.js`):
 - French TV/Movie tracking service with subtitle support
@@ -703,8 +704,8 @@ Example: subsense-0-2607183-vtt-subsource
 | `SUBSENSE_BASE_URL` | `http://127.0.0.1:{PORT}` | Public URL for proxied subtitles |
 | `LOG_LEVEL` | info | Logging: debug, info, warn, error |
 | `SUBSENSE_ENCRYPTION_KEY` | — | **Required** for SubSource. AES-256-GCM encryption key for user API keys. Accepts 64-char hex or passphrase (PBKDF2-derived) |
-| `SUBTITLE_SOURCES` | All sources | Comma-separated provider list (wyzie, betaseries, yify, tvsubtitles, subsource) |
-| `WYZIE_API_KEY` | — | **Required** for Wyzie provider. API key from https://sub.wyzie.io/redeem |
+| `SUBTITLE_SOURCES` | All sources | Comma-separated provider list (wyzie, betaseries, yify, tvsubtitles, subsource, subdl, animetosho) |
+| `WYZIE_API_KEYS` | — | **Required** for Wyzie provider. Comma-separated API key(s) from https://sub.wyzie.io/redeem |
 | `WYZIE_SOURCES` | All sources | Comma-separated Wyzie sources override |
 | `BETASERIES_API_KEY` | — | BetaSeries API key for French/English subtitles |
 | `ENABLE_CACHE` | true | Enable/disable caching |
@@ -811,7 +812,7 @@ Stremio-SubSense/
 │   │   ├── index.js                # Provider registration
 │   │   ├── BaseProvider.js         # Abstract base class
 │   │   ├── ProviderManager.js      # Provider orchestration
-│   │   ├── WyzieProvider.js        # wyzie-lib integration
+│   │   ├── WyzieProvider.js        # Wyzie API integration + key pool
 │   │   ├── BetaSeriesProvider.js   # BetaSeries API (FR/EN)
 │   │   ├── SubSourceProvider.js    # SubSource.net API
 │   │   ├── YIFYProvider.js         # YIFY/YTS (movies only)

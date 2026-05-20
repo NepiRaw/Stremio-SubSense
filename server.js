@@ -62,8 +62,12 @@ async function bootstrap() {
     }
     registerDefaultProviders();
 
+    const { providerManager } = require('./src/providers');
+    const wyzieProvider = providerManager.get('wyzie');
+
     const initTasks = [
         initWyzieSources().catch((err) => log('warn', `[server] Wyzie init failed: ${err.message}`)),
+        wyzieProvider ? wyzieProvider.initialize().catch((err) => log('warn', `[server] Wyzie key pool init failed: ${err.message}`)) : Promise.resolve(),
         initAnimeLists().catch((err) => log('warn', `[server] AnimeLists init failed: ${err.message}`)),
         preloadParser().catch((err) => log('warn', `[server] parser preload failed: ${err.message}`)),
         warmupResponseCache().catch((err) => log('warn', `[server] cache warmup failed: ${err.message}`))

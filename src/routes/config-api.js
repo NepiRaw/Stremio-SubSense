@@ -34,6 +34,46 @@ router.post('/config/encrypt', (req, res) => {
     }
 });
 
+let decryptConfig = null;
+try {
+    const crypto = require('../../src/utils/crypto');
+    decryptConfig = crypto.decryptConfig;
+} catch (_) { }
+
+router.post('/config/decode', (req, res) => {
+    const { configString } = req.body || {};
+    if (!configString || typeof configString !== 'string') {
+        return res.status(400).json({ error: 'configString required' });
+    }
+
+    let config = null;
+
+    try {
+        config = JSON.parse(decodeURIComponent(configString));
+    } catch (_) { }
+
+    if (!config) {
+        try {
+            const decoded = Buffer.from(configString, 'base64').toString('utf8');
+            if (decoded && decoded[0] === '{') {
+                config = JSON.parse(decoded);
+            }
+        } catch (_) { }
+    }
+
+    if (!config && decryptConfig && isEncryptionConfigured()) {
+        try {
+            config = decryptConfig(configString);
+        } catch (_) { }
+    }
+
+    if (!config || typeof config !== 'object') {
+        return res.status(400).json({ error: 'Unable to decode config' });
+    }
+
+    res.json({ config });
+});
+
 router.get('/version', (_req, res) => {
     const packageJson = require('../../package.json');
     res.json({ version: packageJson.version });
@@ -127,6 +167,24 @@ router.post('/subdl/validate', async (req, res) => {
         res.json(result);
     } catch (err) {
         log('error', `[routes/config-api] subdl validate error: ${err.message}`);
+        res.status(500).json({ valid: false, error: err.message });
+    }
+});
+
+router.post('/wyzie/validate', async (req, res) => {
+    const provider = providerManager.get('wyzie');
+    if (!provider) {
+        return res.status(503).json({ valid: false, error: 'Wyzie provider not available' });
+    }
+    const { apiKey } = req.body || {};
+    if (!apiKey) {
+        return res.status(400).json({ valid: false, error: 'API key required' });
+    }
+    try {
+        const result = await provider.validateApiKey(apiKey);
+        res.json(result);
+    } catch (err) {
+        log('error', `[routes/config-api] wyzie validate error: ${err.message}`);
         res.status(500).json({ valid: false, error: err.message });
     }
 });
