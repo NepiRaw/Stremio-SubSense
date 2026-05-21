@@ -26,7 +26,7 @@ This document provides a complete technical overview of the SubSense Stremio add
 
 **SubSense** is a Stremio addon that aggregates subtitles from multiple sources and serves them to Stremio clients. Key features:
 
-- **Multi-source aggregation**: Uses multiple providers including Wyzie API (OpenSubtitles, Subf2m, Kitsunekko, Gestdown, YIFY, TVsubtitles), BetaSeries, YIFY, and TVsubtitles
+- **Multi-source aggregation**: Uses multiple providers including Wyzie API (OpenSubtitles, Subf2m, Kitsunekko, Gestdown, YIFY, TVsubtitles), BetaSeries, YIFY, TVsubtitles, OpenSubtitles (direct), and Gestdown (direct)
 - **Multi-language support**: Up to 5 languages with equal priority
 - **Dual format support**: ASS subtitles converted to VTT (with styling) + SRT (fallback)
 - **Configurable limits**: User-selectable max subtitles per language
@@ -91,6 +91,8 @@ This document provides a complete technical overview of the SubSense Stremio add
                           │  SubSourceProvider    │
                           │  YIFYProvider         │
                           │  TVsubtitlesProvider  │
+                          │  OpenSubtitlesProvider│
+                          │  GestdownProvider     │
                           └───────────────────────┘
                                       │
                                       ▼
@@ -158,6 +160,8 @@ This document provides a complete technical overview of the SubSense Stremio add
 | `SubSourceProvider.js` | SubSource.net API integration (user API key required) |
 | `YIFYProvider.js` | YIFY/YTS subtitle provider (movies only) |
 | `TVsubtitlesProvider.js` | TVsubtitles.net provider (TV series only) |
+| `OpenSubtitlesProvider.js` | Direct OpenSubtitles Legacy API (movies + TV, no key needed) |
+| `GestdownProvider.js` | Gestdown REST API for TV subtitles (TVDB/TMDB ID resolution) |
 | `index.js` | Provider registration and exports |
 
 ### 3.6 Cache (src/cache/)
@@ -644,6 +648,8 @@ Some providers require server-side processing (ZIP extraction, auth, scraping):
 | **BetaSeries** | `/api/betaseries/proxy/:subtitleId` | `lang` (optional) | Fetches subtitle from BetaSeries CDN |
 | **YIFY** | `/api/yify/proxy/:subtitleId` | None | Scrapes yts-subs.com for download link |
 | **TVsubtitles** | `/api/tvsubtitles/proxy/:subtitleId` | `episodeUrl`, `lang` | Scrapes tvsubtitles.net for download |
+| **OpenSubtitles** | `/api/opensubtitles/proxy/:subtitleId` | `url` (required) | Downloads from OpenSubtitles, passes through as-is (SRT) |
+| **Gestdown** | `/api/gestdown/proxy/:subtitleId` | — | Downloads SRT from Gestdown, passes through as-is |
 
 #### 11.2.3 Subtitle URL Formats
 
@@ -661,6 +667,8 @@ https://dl.opensubtitles.org/download/...
 /api/betaseries/proxy/12345?lang=vo
 /api/yify/proxy/movie-name-subtitle-id
 /api/tvsubtitles/proxy/12345?episodeUrl=xxx
+/api/opensubtitles/proxy/1951877389?url=https%3A%2F%2Fdl.opensubtitles.org%2F...
+/api/gestdown/proxy/abc123-uuid
 ```
 
 **Subtitle ID format visible to users:**
@@ -704,10 +712,12 @@ Example: subsense-0-2607183-vtt-subsource
 | `SUBSENSE_BASE_URL` | `http://127.0.0.1:{PORT}` | Public URL for proxied subtitles |
 | `LOG_LEVEL` | info | Logging: debug, info, warn, error |
 | `SUBSENSE_ENCRYPTION_KEY` | — | **Required** for SubSource. AES-256-GCM encryption key for user API keys. Accepts 64-char hex or passphrase (PBKDF2-derived) |
-| `SUBTITLE_SOURCES` | All sources | Comma-separated provider list (wyzie, betaseries, yify, tvsubtitles, subsource, subdl, animetosho) |
+| `SUBTITLE_SOURCES` | All sources | Comma-separated provider list (wyzie, betaseries, yify, tvsubtitles, subsource, subdl, animetosho, opensubtitles, gestdown) |
 | `WYZIE_API_KEYS` | — | **Required** for Wyzie provider. Comma-separated API key(s) from https://sub.wyzie.io/redeem |
 | `WYZIE_SOURCES` | All sources | Comma-separated Wyzie sources override |
 | `BETASERIES_API_KEY` | — | BetaSeries API key for French/English subtitles |
+| `TVDB_API_KEY` | — | TVDB API key for Gestdown provider (IMDB→TVDB lookup). Get one at https://thetvdb.com/api-information |
+| `TMDB_API_KEY` | — | TMDB API key for Gestdown provider (fallback IMDB→TVDB via TMDB). Get one at https://www.themoviedb.org/settings/api |
 | `ENABLE_CACHE` | true | Enable/disable caching |
 | `DB_PATH` | ./data/subsense.db | SQLite database path |
 | `CACHE_RETENTION_DAYS` | 30 | Days before cache cleanup |
@@ -816,7 +826,9 @@ Stremio-SubSense/
 │   │   ├── BetaSeriesProvider.js   # BetaSeries API (FR/EN)
 │   │   ├── SubSourceProvider.js    # SubSource.net API
 │   │   ├── YIFYProvider.js         # YIFY/YTS (movies only)
-│   │   └── TVsubtitlesProvider.js  # TVsubtitles.net (series only)
+│   │   ├── TVsubtitlesProvider.js  # TVsubtitles.net (series only)
+│   │   ├── OpenSubtitlesProvider.js # OpenSubtitles Legacy API (movies + TV)
+│   │   └── GestdownProvider.js     # Gestdown API (TV only, TVDB/TMDB lookup)
 │   │
 │   ├── cache/
 │   │   ├── index.js                # Cache exports

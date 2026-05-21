@@ -9,6 +9,8 @@ const SubSourceProvider = require('./SubSourceProvider');
 const SubDLProvider = require('./SubDLProvider');
 const TVsubtitlesProvider = require('./TVsubtitlesProvider');
 const AnimeToshoProvider = require('./AnimeToshoProvider');
+const OpenSubtitlesProvider = require('./OpenSubtitlesProvider');
+const GestdownProvider = require('./GestdownProvider');
 
 function isEnabled(name) {
     const sources = process.env.SUBTITLE_SOURCES;
@@ -39,6 +41,12 @@ function registerDefaultProviders(manager = providerManager) {
     if (!manager.get('animetosho') && isEnabled('animetosho')) {
         manager.register(new AnimeToshoProvider());
     }
+    if (!manager.get('opensubtitles') && isEnabled('opensubtitles')) {
+        manager.register(new OpenSubtitlesProvider());
+    }
+    if (!manager.get('gestdown') && isEnabled('gestdown') && (process.env.TVDB_API_KEY || process.env.TMDB_API_KEY)) {
+        manager.register(new GestdownProvider());
+    }
     return manager;
 }
 
@@ -54,5 +62,7 @@ module.exports = {
     SubDLProvider,
     TVsubtitlesProvider,
     AnimeToshoProvider,
+    OpenSubtitlesProvider,
+    GestdownProvider,
     registerDefaultProviders
 };

@@ -594,5 +594,91 @@ async function fetchAnimetosho(hexId, fmt = 'vtt') {
     };
 }
 
+// =====================================================
+// OpenSubtitles proxy (direct download with auth header)
+// =====================================================
+
+const OS_USER_AGENT = 'VLSub 0.10.3';
+
+router.get('/opensubtitles/proxy/:subtitleId', async (req, res) => {
+    const { subtitleId } = req.params;
+    const { url: downloadUrl } = req.query;
+    const fmt = pickFmt(req);
+    const cacheKey = `opensubtitles:${subtitleId}:${fmt}`;
+
+    if (!downloadUrl) return res.status(400).send('Missing download URL');
+
+    try {
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchOpenSubtitles(downloadUrl, fmt));
+        sendCached(res, entry, hit ? 'hit' : 'miss');
+    } catch (err) {
+        log('error', `[proxy/opensubtitles] ${err.message}`);
+        res.status(err.status || 500).send(`OpenSubtitles proxy error: ${err.message}`);
+    }
+});
+
+async function fetchOpenSubtitles(downloadUrl, fmt = 'vtt') {
+    const dlRes = await fetch(downloadUrl, {
+        headers: { 'X-User-Agent': OS_USER_AGENT }
+    });
+    if (!dlRes.ok) {
+        const err = new Error(`opensubtitles download ${dlRes.status}`);
+        err.status = dlRes.status;
+        throw err;
+    }
+
+    const text = await dlRes.text();
+    const conv = convertForOutput(text, fmt);
+    return {
+        content: conv.content,
+        contentType: contentTypeFor(conv.outputFormat),
+        headers: {
+            'X-OpenSubtitles-Original-Format': conv.originalFormat,
+            'X-OpenSubtitles-Output-Format': conv.outputFormat
+        }
+    };
+}
+
+// =====================================================
+// Gestdown proxy (direct SRT download)
+// =====================================================
+
+router.get('/gestdown/proxy/:subtitleId', async (req, res) => {
+    const { subtitleId } = req.params;
+    const fmt = pickFmt(req);
+    const cacheKey = `gestdown:${subtitleId}:${fmt}`;
+
+    try {
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchGestdown(subtitleId, fmt));
+        sendCached(res, entry, hit ? 'hit' : 'miss');
+    } catch (err) {
+        log('error', `[proxy/gestdown] ${err.message}`);
+        res.status(err.status || 500).send(`Gestdown proxy error: ${err.message}`);
+    }
+});
+
+async function fetchGestdown(subtitleId, fmt = 'vtt') {
+    const downloadUrl = `https://api.gestdown.info/subtitles/download/${subtitleId}`;
+    const dlRes = await fetch(downloadUrl, {
+        headers: { 'Accept': 'text/srt, text/plain, */*' }
+    });
+    if (!dlRes.ok) {
+        const err = new Error(`gestdown download ${dlRes.status}`);
+        err.status = dlRes.status;
+        throw err;
+    }
+
+    const text = await dlRes.text();
+    const conv = convertForOutput(text, fmt);
+    return {
+        content: conv.content,
+        contentType: contentTypeFor(conv.outputFormat),
+        headers: {
+            'X-Gestdown-Original-Format': conv.originalFormat,
+            'X-Gestdown-Output-Format': conv.outputFormat
+        }
+    };
+}
+
 module.exports = router;
 module.exports.getProxyCacheStats = getProxyCacheStats;

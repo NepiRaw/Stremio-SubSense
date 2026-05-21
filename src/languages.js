@@ -797,6 +797,32 @@ function getSupportedLanguages() {
 }
 
 // ============================================================
+// GESTDOWN LANGUAGE SUPPORT
+// ============================================================
+
+/**
+ * Convert any language code to Gestdown's English language name format.
+ * Gestdown expects full English names (e.g., "English", "French", "Portuguese").
+ * 
+ * Uses the master LANGUAGE_TABLE which already has English names for all languages.
+ * Handles regional codes (pt-br → "Portuguese") by stripping region.
+ */
+function toGestdownName(code) {
+    if (!code) return null;
+
+    const lang = getByAnyCode(code);
+    if (lang && lang.name) return lang.name;
+
+    const basePart = code.split('-')[0].toLowerCase();
+    if (basePart !== code.toLowerCase()) {
+        const baseLang = getByAnyCode(basePart);
+        if (baseLang && baseLang.name) return baseLang.name;
+    }
+
+    return null;
+}
+
+// ============================================================
 // EXPORTS
 // ============================================================
 
@@ -829,6 +855,7 @@ module.exports = {
     toBetaseriesCode,
     toSubsourceCode,
     toSubdlCode,
+    toGestdownName,
     getDisplayName,
     getNativeName,
     

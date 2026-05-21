@@ -378,6 +378,7 @@ label {
     background: rgba(26, 34, 63, 0.6);
     border-radius: 12px;
     padding: 16px;
+    margin-top: 20px;
     margin-bottom: 16px;
     border: 1px solid rgba(74, 144, 226, 0.15);
 }
@@ -400,6 +401,19 @@ label {
     letter-spacing: 0.5px;
 }
 
+.sources-summary-label .info-tooltip {
+    color: var(--color-text-muted);
+    vertical-align: middle;
+    margin-left: 2px;
+    position: relative;
+    top: -1px;
+}
+
+.sources-summary-label .info-tooltip:hover,
+.sources-summary-label .info-tooltip:focus-visible {
+    color: var(--color-text-secondary);
+}
+
 .sources-summary-grid {
     display: flex;
     flex-wrap: wrap;
@@ -417,6 +431,14 @@ label {
     font-size: 0.78rem;
     color: var(--color-text-secondary);
     transition: var(--transition);
+    cursor: default;
+}
+
+.sources-summary-grid .source-chip:hover {
+    background: rgba(74, 144, 226, 0.18);
+    border-color: rgba(74, 144, 226, 0.4);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(74, 144, 226, 0.15);
 }
 
 .sources-summary-grid .source-chip img {
@@ -858,6 +880,8 @@ label {
     font-size: 12.5px;
     font-weight: 400;
     line-height: 1.45;
+    text-transform: none;
+    letter-spacing: normal;
     border: 1px solid rgba(74, 144, 226, 0.4);
     border-radius: 8px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);

@@ -195,7 +195,17 @@
             </div>
 
             <div class="active-sources-summary" id="activeSourcesSummary">
-                <p class="sources-summary-label">Your active sources:</p>
+                <p class="sources-summary-label">
+                    Your current active sources
+                    <span class="info-tooltip" tabindex="0" aria-label="More info">
+                        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                            <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm-1-12h2v2h-2V8zm0 4h2v6h-2v-6z"/>
+                        </svg>
+                        <span class="info-tooltip-bubble" role="tooltip">
+                            Enter your API keys above to add optional sources to your configuration.
+                        </span>
+                    </span>
+                </p>
                 <div class="sources-summary-grid" id="activeSourcesGrid"></div>
             </div>
 
@@ -239,19 +249,15 @@
             </h2>
             <p class="sources-description">This addon aggregates subtitles from multiple trusted sources:</p>
             
-            <div class="provider-section" id="wyzieSection">
+            <div class="additional-sources-section" id="additionalSourcesSection">
                 <div class="provider-badge">
-                    <svg viewBox="0 0 24 24" style="width:16px; height:16px; fill:currentColor; margin-right:4px;"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                    Powered by Wyzie
+                    <svg viewBox="0 0 24 24" style="width:16px; height:16px; fill:currentColor; margin-right:4px;"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                    SubSense Sources
                 </div>
-                <div class="sources-grid">
+                <div class="sources-grid" id="additionalSourcesGrid">
                     <div class="source-item">
                         <img src="/providers/opensubtitles.ico" alt="OpenSubtitles" class="source-logo" loading="lazy">
                         <span class="source-name">OpenSubtitles</span>
-                    </div>
-                    <div class="source-item">
-                        <img src="/providers/subf2m.png" alt="Subf2m" class="source-logo" loading="lazy">
-                        <span class="source-name">Subf2m</span>
                     </div>
                     <div class="source-item">
                         <img src="/providers/gestdown.png" alt="Gestdown" class="source-logo" loading="lazy">
@@ -261,23 +267,6 @@
                         <img src="/providers/animetosho.ico" alt="AnimeTosho" class="source-logo" loading="lazy">
                         <span class="source-name">AnimeTosho</span>
                     </div>
-                    <div class="source-item">
-                        <img src="/providers/jimaku.png" alt="Jimaku" class="source-logo" loading="lazy">
-                        <span class="source-name">Jimaku</span>
-                    </div>
-                    <div class="source-item">
-                        <img src="/providers/kitsunekko.png" alt="Kitsunekko" class="source-logo" loading="lazy">
-                        <span class="source-name">Kitsunekko</span>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="additional-sources-section" id="additionalSourcesSection">
-                <div class="provider-badge">
-                    <svg viewBox="0 0 24 24" style="width:16px; height:16px; fill:currentColor; margin-right:4px;"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-                    Additional Sources
-                </div>
-                <div class="sources-grid" id="additionalSourcesGrid">
                     <div class="source-item">
                         <img src="/providers/yify.ico" alt="YIFY" class="source-logo" loading="lazy">
                         <span class="source-name">YIFY</span>
@@ -297,6 +286,27 @@
                     <div class="source-item">
                         <img src="/providers/tvsubtitles.ico" alt="TVsubtitles" class="source-logo" loading="lazy">
                         <span class="source-name">TVsubtitles</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="provider-section" id="wyzieSection">
+                <div class="provider-badge">
+                    <svg viewBox="0 0 24 24" style="width:16px; height:16px; fill:currentColor; margin-right:4px;"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    Additional Sources Powered by Wyzie
+                </div>
+                <div class="sources-grid">
+                    <div class="source-item">
+                        <img src="/providers/subf2m.png" alt="Subf2m" class="source-logo" loading="lazy">
+                        <span class="source-name">Subf2m</span>
+                    </div>
+                    <div class="source-item">
+                        <img src="/providers/jimaku.png" alt="Jimaku" class="source-logo" loading="lazy">
+                        <span class="source-name">Jimaku</span>
+                    </div>
+                    <div class="source-item">
+                        <img src="/providers/kitsunekko.png" alt="Kitsunekko" class="source-logo" loading="lazy">
+                        <span class="source-name">Kitsunekko</span>
                     </div>
                 </div>
             </div>

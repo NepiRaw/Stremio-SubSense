@@ -77,9 +77,10 @@ const activeSourcesGrid = document.getElementById('activeSourcesGrid');
 // Source definitions for the dynamic summary
 const DEFAULT_SOURCES = [
     { name: 'OpenSubtitles', icon: '/providers/opensubtitles.ico' },
+    { name: 'Gestdown', icon: '/providers/gestdown.png' },
+    { name: 'AnimeTosho', icon: '/providers/animetosho.ico' },
     { name: 'YIFY', icon: '/providers/yify.ico' },
     { name: 'BetaSeries', icon: '/providers/betaseries.ico' },
-    { name: 'AnimeTosho', icon: '/providers/animetosho.ico' },
     { name: 'TVsubtitles', icon: '/providers/tvsubtitles.ico' }
 ];
 
@@ -88,7 +89,6 @@ const API_KEY_SOURCES = {
     subsource: { name: 'SubSource', icon: '/providers/subsource.png' },
     wyzie: [
         { name: 'Subf2m', icon: '/providers/subf2m.png' },
-        { name: 'Gestdown', icon: '/providers/gestdown.png' },
         { name: 'Kitsunekko', icon: '/providers/kitsunekko.png' }
     ]
 };

@@ -84,6 +84,8 @@ services:
       # --- Provider API keys ---
       # - WYZIE_API_KEYS=                      # REQUIRED for wyzie provider (comma-separated for multiple keys)
       # - BETASERIES_API_KEY=                  # Optional - BetaSeries (French/English)
+      # - TVDB_API_KEY=                        # Optional - Gestdown provider (TVDB lookup)
+      # - TMDB_API_KEY=                        # Optional - Gestdown fallback (TMDB lookup)
 
       # See .env.example for the full list of options
     volumes:
@@ -114,7 +116,7 @@ Access your addon at `http://localhost:3100`
 | `SUBSENSE_BASE_URL` | Optional | Auto-detected | Public base URL used in generated proxy links for production deployments |
 | `LOG_LEVEL` | Optional | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 | `SUBSENSE_ENCRYPTION_KEY` | **Required** | — | Secret used to encrypt/decrypt user-provided provider API keys inside manifest URLs |
-| `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource,subdl,animetosho` | Comma-separated list of enabled providers |
+| `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource,subdl,animetosho,opensubtitles,gestdown` | Comma-separated list of enabled providers |
 | `WYZIE_API_KEYS` | **Required** | — | Wyzie API key(s), comma-separated for pool rotation (get keys at https://sub.wyzie.io/redeem) |
 | `WYZIE_SOURCES` | Optional | All available sources | Override the Wyzie sources queried by the `wyzie` provider |
 | `BETASERIES_API_KEY` | Optional | — | Server-side BetaSeries API key for BetaSeries subtitle searches |
@@ -139,6 +141,8 @@ These are the high-level providers that SubSense can use:
 | `tvsubtitles` | TVsubtitles.net for TV series | No |
 | `betaseries` | French/English subtitles | Yes (server-side) |
 | `animetosho` | Anime subtitles from embedded MKV tracks (AnimeTosho.org) | No (but `ANIDB_CLIENT` needed for TV episodes) |
+| `opensubtitles` | Direct OpenSubtitles Legacy API (movies + TV) | No |
+| `gestdown` | Gestdown REST API for TV subtitles | Yes (server-side `TVDB_API_KEY` OR `TMDB_API_KEY`) |
 
 ### Wyzie Sources
 
