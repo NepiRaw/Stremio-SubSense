@@ -130,7 +130,8 @@ router.get('/subtitle/:format/*', async (req, res) => {
                 err.status = response.status;
                 throw err;
             }
-            const text = await response.text();
+            const buffer = Buffer.from(await response.arrayBuffer());
+            const text = bufferToText(buffer);
             const conv = convertForOutput(text, format);
             return {
                 content: conv.content,
@@ -627,7 +628,8 @@ async function fetchOpenSubtitles(downloadUrl, fmt = 'vtt') {
         throw err;
     }
 
-    const text = await dlRes.text();
+    const buffer = Buffer.from(await dlRes.arrayBuffer());
+    const text = bufferToText(buffer);
     const conv = convertForOutput(text, fmt);
     return {
         content: conv.content,
@@ -668,7 +670,8 @@ async function fetchGestdown(subtitleId, fmt = 'vtt') {
         throw err;
     }
 
-    const text = await dlRes.text();
+    const buffer = Buffer.from(await dlRes.arrayBuffer());
+    const text = bufferToText(buffer);
     const conv = convertForOutput(text, fmt);
     return {
         content: conv.content,
