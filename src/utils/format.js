@@ -127,7 +127,7 @@ function formatForStremio(subtitles, opts = {}) {
 
 // Provider-proxy paths that perform server-side extraction+conversion and
 // honor a `?fmt=ass|vtt` hint so we can request the original ASS bytes.
-const PROVIDER_PROXY_RE = /\/api\/(yify|tvsubtitles|subsource|betaseries|opensubtitles|gestdown)\/proxy\//;
+const PROVIDER_PROXY_RE = /\/api\/(yify|tvsubtitles|subsource|betaseries|opensubtitles|gestdown|animetosho|animetosho-xyz)\/proxy\//;
 
 // Build the user-facing label: "Provider · [FORMAT] · <name> · [HI]"
 function buildLabel(provider, fmt, name, isHI) {

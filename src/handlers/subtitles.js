@@ -5,6 +5,7 @@ const { mapStremioToWyzie } = require('../../src/languages');
 const { providerManager } = require('../providers');
 const { ResponseCache, SubtitleCache } = require('../cache');
 const { prioritizeByLanguage, formatForStremio } = require('../utils/format');
+const { validateWyzieUrls } = require('../utils/validateWyzie');
 const { statsService } = require('../stats');
 
 let encryptConfig = null;
@@ -71,8 +72,9 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         if (cached.status === 'stale') {
             scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey, requestContext);
         }
-        fireTrack(parsedConfig, parsed, languages, cached.subtitles, Date.now() - startedAt, true);
-        return { subtitles: cached.subtitles };
+        const validated = await validateWyzieUrls(cached.subtitles);
+        fireTrack(parsedConfig, parsed, languages, validated, Date.now() - startedAt, true);
+        return { subtitles: validated };
     }
 
     // L2 fallback: language-agnostic lookup before hitting providers
@@ -83,8 +85,9 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         const returnedL2 = l2Subs ? l2Subs.subtitles : l2Hit.subtitles;
         log('info',
             `[handler] l2-hit ${reqTag(parsed, wyzieLanguages)} -> ${l2Hit.subtitles.length} subs (returning ${returnedL2.length}) in ${Date.now() - startedAt}ms`);
-        fireTrack(parsedConfig, parsed, languages, returnedL2, Date.now() - startedAt, true);
-        return { subtitles: returnedL2 };
+        const validated = await validateWyzieUrls(returnedL2);
+        fireTrack(parsedConfig, parsed, languages, validated, Date.now() - startedAt, true);
+        return { subtitles: validated };
     }
 
     const result = await providerManager.searchAll(
@@ -100,7 +103,12 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         { dedupeKey: cacheKey }
     );
 
-    const { formatted, languageMatch } = buildFormatted(result.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });
+    const remainingBudget = Math.max(0, 8000 - (Date.now() - startedAt));
+    const validatedSubtitles = remainingBudget > 500
+        ? await validateWyzieUrls(result.subtitles, Math.min(remainingBudget, 3000))
+        : result.subtitles;
+
+    const { formatted, languageMatch } = buildFormatted(validatedSubtitles, languages, 0, { keepAss: parsedConfig.keepAss });
 
     responseCache.set(cacheKey, formatted);
     persistL2(parsed, formatted).catch((err) =>

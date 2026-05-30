@@ -4,11 +4,11 @@
  * Unified subtitle proxy.
  *
  * Endpoints:
- *   GET /api/subtitle/:format/*          — generic URL proxy + ASS conversion
- *   GET /api/yify/proxy/:subtitleId      — resolve YIFY ZIP and extract subtitle
+ *   GET /api/subtitle/:format/*            generic URL proxy + ASS conversion
+ *   GET /api/yify/proxy/:subtitleId        resolve YIFY ZIP and extract subtitle
  *   GET /api/tvsubtitles/proxy/:subtitleId
  *   GET /api/subsource/proxy/:subtitleId/:releaseName?
- *   GET /api/subdl/proxy/*                              — SubDL ZIP proxy (public, no API key)
+ *   GET /api/subdl/proxy/*                 SubDL ZIP proxy (public, no API key)
  *   GET /api/betaseries/proxy/:subtitleId
  *
  * All proxy results are cached in a single bounded LRU keyed by
@@ -591,6 +591,87 @@ async function fetchAnimetosho(hexId, fmt = 'vtt') {
             'X-SubSense-Original-Format': originalFormat,
             'X-SubSense-Output-Format': conv.outputFormat,
             'X-SubSense-Source': 'animetosho'
+        }
+    };
+}
+
+// =====================================================
+// AnimeTosho XYZ subtitle proxy (storage.animetosho.xyz)
+// =====================================================
+
+const { decodeProxyToken, buildStorageUrl } = require('../utils/animetoshoXyzApi');
+
+/**
+ * AnimeTosho XYZ subtitle proxy.
+ * Downloads XZ-compressed subtitle from storage.animetosho.xyz, decompresses, converts.
+ * The token encodes release ID, track number, language, extension, and torrent name.
+ *
+ * GET /api/animetosho-xyz/proxy/:token?fmt=vtt|ass|srt
+ */
+router.get('/animetosho-xyz/proxy/:token', async (req, res) => {
+    const { token } = req.params;
+    const fmt = pickFmt(req);
+
+    if (!lzma) {
+        return res.status(500).send('XZ decompression not available');
+    }
+
+    const decoded = decodeProxyToken(token);
+    if (!decoded || !decoded.r || decoded.t == null || !decoded.n) {
+        return res.status(400).send('Invalid proxy token');
+    }
+
+    const cacheKey = `animetosho-xyz:${decoded.r}:${decoded.t}:${fmt}`;
+
+    try {
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchAnimetoshoXyz(decoded, fmt));
+        sendCached(res, entry, hit ? 'hit' : 'miss');
+    } catch (err) {
+        log('error', `[proxy/animetosho-xyz] ${decoded.r}/track${decoded.t}: ${err.message}`);
+        res.status(err.status || 500).send(`AnimeTosho XYZ proxy error: ${err.message}`);
+    }
+});
+
+async function fetchAnimetoshoXyz(decoded, fmt = 'vtt') {
+    const track = { trackNum: decoded.t, language: decoded.l, ext: decoded.e };
+    const url = buildStorageUrl(decoded.r, decoded.n, track);
+
+    const response = await fetch(url, {
+        headers: { 'User-Agent': 'SubSense-Stremio/2.0' },
+        signal: AbortSignal.timeout(30000)
+    });
+
+    if (!response.ok) {
+        const err = new Error(`AT-XYZ storage returned ${response.status}`);
+        err.status = response.status === 404 ? 404 : 502;
+        throw err;
+    }
+
+    const compressed = Buffer.from(await response.arrayBuffer());
+
+    const decompressed = await new Promise((resolve, reject) => {
+        lzma.decompress(compressed, (result, error) => {
+            if (error) reject(new Error(`XZ decompression failed: ${error}`));
+            else resolve(result);
+        });
+    });
+
+    const text = decompressed.toString('utf8');
+
+    const originalFormat = text.includes('[Script Info]') ? 'ass' :
+                          /^\d+\s*\r?\n\d{2}:\d{2}/.test(text) ? 'srt' :
+                          text.includes('WEBVTT') ? 'vtt' : 'unknown';
+
+    const target = (fmt === 'ass' && originalFormat === 'ass') ? 'ass' : fmt;
+    const conv = convertForOutput(text, target);
+
+    return {
+        content: conv.content,
+        contentType: contentTypeFor(conv.outputFormat),
+        headers: {
+            'X-SubSense-Original-Format': originalFormat,
+            'X-SubSense-Output-Format': conv.outputFormat,
+            'X-SubSense-Source': 'animetosho-xyz'
         }
     };
 }
