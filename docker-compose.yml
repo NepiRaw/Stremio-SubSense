@@ -16,6 +16,10 @@ services:
       # - SUBSENSE_BASE_URL=                   # Public URL for proxy links (auto-detected if not set)
       - LOG_LEVEL=info                         # debug | info | warn | error
 
+      # --- WARP proxy ---
+      - WARP_ENABLED=true
+      # - WARP_LICENSE_KEY=                    # Optional WARP+ license key
+
       # --- Provider selection (optional, defaults to all) ---
       # - SUBTITLE_SOURCES=wyzie,betaseries,yify,tvsubtitles,subsource
 
@@ -32,8 +36,18 @@ services:
 
       # --- Stats (optional, default: minimal) ---
       # - STATS_REFRESH_INTERVAL=minimal       # "minimal" (default) | "0" (disabled) | <ms> (full mode)
+    
+    # --- WARP requirements ---
+    cap_add:
+       - NET_ADMIN
+    devices:
+       - /dev/net/tun:/dev/net/tun
+    sysctls:
+       - net.ipv6.conf.all.disable_ipv6=0
+       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./data:/app/data
+      - warp-data:/var/lib/cloudflare-warp
 
   worker:
     image: nepiraw/stremio-subsense:latest
@@ -54,3 +68,6 @@ services:
       # - WORKER_HEALTH_INTERVAL_MS=60000
     volumes:
       - ./data:/app/data
+
+volumes:
+  warp-data:
