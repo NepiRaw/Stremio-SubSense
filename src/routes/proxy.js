@@ -124,7 +124,14 @@ router.get('/subtitle/:format/*', async (req, res) => {
                 }
             }
 
-            const response = await fetch(proxiedUrl.toString());
+            const fetchHeaders = {};
+            if (proxiedUrl.hostname === 'dl.opensubtitles.org') {
+                fetchHeaders['X-User-Agent'] = 'VLSub 0.10.3';
+            }
+
+            const response = await fetch(proxiedUrl.toString(), {
+                headers: Object.keys(fetchHeaders).length > 0 ? fetchHeaders : undefined
+            });
             if (!response.ok) {
                 const err = new Error(`upstream ${response.status}`);
                 err.status = response.status;

@@ -214,8 +214,8 @@ class SubDLProvider extends BaseProvider {
             rating: null,
             downloadCount: null,
             display: displayName,
-            format: null,
-            needsConversion: null
+            format: 'srt',
+            needsConversion: false
         });
     }
 
