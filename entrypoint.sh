@@ -37,24 +37,29 @@ if [ "${WARP_ENABLED}" = "true" ] || [ "${WARP_ENABLED}" = "1" ]; then
         if [ -n "$WARP_LICENSE_KEY" ]; then
             warp-cli --accept-tos registration license "$WARP_LICENSE_KEY" && echo "[WARP] License registered"
         fi
-        warp-cli --accept-tos connect
     else
-        echo "[WARP] Client already registered, reconnecting..."
-        warp-cli --accept-tos connect
+        echo "[WARP] Client already registered"
     fi
+
+    # Use proxy mode: only traffic routed through the SOCKS5 port goes through WARP.
+    # Direct fetch() uses VPS IP (required for OpenSubtitles cookie-based downloads).
+    warp-cli --accept-tos mode proxy
+    warp-cli --accept-tos proxy port "$WARP_PORT"
+    warp-cli --accept-tos connect
 
     sleep "$WARP_SLEEP"
 
-    # Start GOST as SOCKS5 proxy in front of WARP
-    echo "[WARP] Starting GOST SOCKS5 proxy on port $WARP_PORT..."
-    gost -L "socks5://127.0.0.1:$WARP_PORT" > /dev/null 2>&1 &
-    sleep 1
-
-    # Verify WARP is working
+    # Verify WARP proxy is working
     if curl -s --socks5-hostname "127.0.0.1:$WARP_PORT" "https://cloudflare.com/cdn-cgi/trace" 2>/dev/null | grep -q "warp=on\|warp=plus"; then
-        echo "[WARP] Connected and working (proxy on 127.0.0.1:$WARP_PORT)"
+        echo "[WARP] Proxy mode active on 127.0.0.1:$WARP_PORT"
     else
-        echo "[WARP] WARNING: WARP may not be fully connected. Provider downloads may fail."
+        echo "[WARP] WARNING: WARP proxy may not be ready. Retrying..."
+        sleep 3
+        if curl -s --socks5-hostname "127.0.0.1:$WARP_PORT" "https://cloudflare.com/cdn-cgi/trace" 2>/dev/null | grep -q "warp=on\|warp=plus"; then
+            echo "[WARP] Proxy mode active on 127.0.0.1:$WARP_PORT (after retry)"
+        else
+            echo "[WARP] WARNING: WARP may not be fully connected. Provider downloads may fail."
+        fi
     fi
 
     export WARP_PROXY_URL="socks5h://127.0.0.1:$WARP_PORT"

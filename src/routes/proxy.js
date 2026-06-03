@@ -17,11 +17,9 @@
 
 const express = require('express');
 const cheerio = require('cheerio');
-const { SocksProxyAgent } = require('socks-proxy-agent');
-const https = require('https');
-const http = require('http');
 
 const { log } = require('../../src/utils');
+const { warpFetch, WARP_DOMAINS } = require('../utils/warpFetch');
 const {
     extractSubtitleEntries,
     selectSubtitleEntry,
@@ -32,67 +30,11 @@ const {
 } = require('../utils/archive');
 const cfCookieManager = require('../utils/cfCookieManager');
 
-// WARP SOCKS5 proxy for upstream providers that block IPs
-const WARP_PROXY_URL = process.env.WARP_PROXY_URL || '';
-let warpAgent = null;
-if (WARP_PROXY_URL) {
-    try {
-        warpAgent = new SocksProxyAgent(WARP_PROXY_URL);
-        log('info', `[proxy] WARP proxy configured: ${WARP_PROXY_URL}`);
-    } catch (e) {
-        log('warn', `[proxy] Failed to configure WARP proxy: ${e.message}`);
-    }
-}
-
-// Domains that require proxying through WARP
-const WARP_DOMAINS = new Set(['dl.opensubtitles.org', 'dl.subdl.com']);
-
 /**
- * Fetch with optional WARP SOCKS5 proxy for blocked domains.
+ * Fetch with WARP SOCKS5 proxy
  */
 function proxyFetch(url, options = {}) {
-    if (!warpAgent) return fetch(url, options);
-    const hostname = new URL(url).hostname;
-    if (!WARP_DOMAINS.has(hostname)) return fetch(url, options);
-
-    return new Promise((resolve, reject) => {
-        const parsed = new URL(url);
-        const mod = parsed.protocol === 'https:' ? https : http;
-        const reqOpts = {
-            hostname: parsed.hostname,
-            port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-            path: parsed.pathname + parsed.search,
-            method: 'GET',
-            headers: options.headers || {},
-            agent: warpAgent
-        };
-
-        const req = mod.request(reqOpts, (res) => {
-            if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
-                const redirectUrl = new URL(res.headers.location, url).toString();
-                proxyFetch(redirectUrl, options).then(resolve).catch(reject);
-                res.resume();
-                return;
-            }
-
-            const chunks = [];
-            res.on('data', (chunk) => chunks.push(chunk));
-            res.on('end', () => {
-                const body = Buffer.concat(chunks);
-                resolve({
-                    ok: res.statusCode >= 200 && res.statusCode < 300,
-                    status: res.statusCode,
-                    headers: new Headers(Object.entries(res.headers).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])),
-                    arrayBuffer: () => Promise.resolve(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)),
-                    text: () => Promise.resolve(body.toString('utf8'))
-                });
-            });
-            res.on('error', reject);
-        });
-
-        req.on('error', reject);
-        req.end();
-    });
+    return warpFetch(url, options);
 }
 
 let decryptConfig = null;
@@ -855,19 +797,16 @@ async function fetchOsBuffer(url) {
     }
 
     if (!buffer) {
-        log('info', '[proxy/os] cookies unavailable or failed, using WARP fallback');
-        const dlRes = await proxyFetch(url, {
-            headers: { 'X-User-Agent': OS_USER_AGENT }
+        log('info', '[proxy/os] cookies unavailable or failed, trying direct fetch');
+        const dlRes = await fetch(url, {
+            headers: { 'User-Agent': OS_USER_AGENT },
+            redirect: 'follow',
+            signal: AbortSignal.timeout(15000)
         });
-        if (!dlRes.ok) {
-            const err = new Error(`opensubtitles download ${dlRes.status}`);
-            err.status = dlRes.status;
-            throw err;
-        }
         buffer = Buffer.from(await dlRes.arrayBuffer());
-        if (isCaptchaResponse(buffer)) {
-            const err = new Error('opensubtitles captcha (cookies and WARP both failed)');
-            err.status = 403;
+        if (!dlRes.ok || isCaptchaResponse(buffer)) {
+            const err = new Error(`upstream ${dlRes.status}`);
+            err.status = isCaptchaResponse(buffer) ? 403 : dlRes.status;
             throw err;
         }
     }

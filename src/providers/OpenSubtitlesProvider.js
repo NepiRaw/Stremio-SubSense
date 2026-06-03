@@ -2,6 +2,7 @@
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log } = require('../utils');
+const { warpFetch } = require('../utils/warpFetch');
 const { toAlpha2, toAlpha3B, getDisplayName, getByAnyCode } = require('../languages');
 
 const BASE_URL = 'https://rest.opensubtitles.org';
@@ -75,7 +76,7 @@ class OpenSubtitlesProvider extends BaseProvider {
         log('debug', `[OpenSubtitlesProvider] Fetching: ${url}`);
 
         await this._throttle();
-        const response = await fetch(url, {
+        const response = await warpFetch(url, {
             headers: {
                 'X-User-Agent': USER_AGENT,
                 'Accept': 'application/json'
