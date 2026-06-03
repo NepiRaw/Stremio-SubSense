@@ -14,6 +14,7 @@ const { preloadParser } = require('./src/utils/filenameMatcher');
 const { initWyzieSources } = require('./src/providers/WyzieProvider');
 const { init: initAnimeLists } = require('./src/utils/animeLists');
 const { initAnidbCache, isAnidbConfigured } = require('./src/utils/anidbApi');
+const cfCookieManager = require('./src/utils/cfCookieManager');
 
 const { registerDefaultProviders } = require('./src/providers');
 const { warmupResponseCache } = require('./src/handlers/subtitles');
@@ -70,7 +71,8 @@ async function bootstrap() {
         wyzieProvider ? wyzieProvider.initialize().catch((err) => log('warn', `[server] Wyzie key pool init failed: ${err.message}`)) : Promise.resolve(),
         initAnimeLists().catch((err) => log('warn', `[server] AnimeLists init failed: ${err.message}`)),
         preloadParser().catch((err) => log('warn', `[server] parser preload failed: ${err.message}`)),
-        warmupResponseCache().catch((err) => log('warn', `[server] cache warmup failed: ${err.message}`))
+        warmupResponseCache().catch((err) => log('warn', `[server] cache warmup failed: ${err.message}`)),
+        cfCookieManager.init().catch((err) => log('warn', `[server] cfCookieManager init failed: ${err.message}`))
     ];
 
     if (isAnidbConfigured()) {

@@ -34,6 +34,13 @@ services:
       # - CACHE_RETENTION_DAYS=30              # Days before expired cache entries are cleaned up
       # - CACHE_REFRESH_INTERVAL=604800        # Seconds before background refresh of stale entries
 
+      # --- Optional flaresolverr service ---
+      # - FLARESOLVERR_URL=http://flaresolverr:8191
+
+      # --- OpenSubtitles proxy cache (optional, defaults shown) ---
+      # - OS_CACHE_MAX=5000                    # Dedicated OS cache entries (default: 5000)
+      # - OS_CACHE_TTL_HOURS=48                # OS cache TTL in hours (default: 48)
+
       # --- Stats (optional, default: minimal) ---
       # - STATS_REFRESH_INTERVAL=minimal       # "minimal" (default) | "0" (disabled) | <ms> (full mode)
     
@@ -68,6 +75,13 @@ services:
       # - WORKER_HEALTH_INTERVAL_MS=60000
     volumes:
       - ./data:/app/data
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
 
 volumes:
   warp-data:

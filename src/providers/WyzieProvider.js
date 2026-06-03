@@ -205,12 +205,14 @@ const SOURCE_METADATA = {
     'podnapisi':     { display: 'Podnapisi',      icon: null,                url: 'https://www.podnapisi.net' },
     'ajatttools':    { display: 'AjattTools',     icon: null,                url: null },
     'tvsubtitles':   { display: 'TVsubtitles',    icon: 'tvsubtitles.png',   url: 'https://www.tvsubtitles.net' },
+    'indexsubtitle': { display: 'IndexSubtitle',  icon: null,                url: 'https://indexsubtitle.cc' },
     'ai':            { display: 'AI',             icon: null,                url: null }
 };
 
 // Codename → real source name mapping (Wyzie API returns NATO codenames in search results)
 // Inferred from /api/status capabilities + /sources tiers:
 //   charlie (free, movies+TV) = opensubtitles
+//   lima (free, movies+TV) = indexsubtitle (indexsubtitle.cc)
 //   kilo (free, TV only) = tvsubtitles
 //   india (paid, movies only) = yify
 //   hotel (paid, TV only) = gestdown
@@ -218,6 +220,7 @@ const SOURCE_METADATA = {
 //   golf (paid, movies+TV) = kitsunekko
 const SOURCE_CODENAME_MAP = {
     'charlie': 'opensubtitles',
+    'lima':    'indexsubtitle',
     'kilo':    'tvsubtitles',
     'india':   'yify',
     'hotel':   'gestdown',
