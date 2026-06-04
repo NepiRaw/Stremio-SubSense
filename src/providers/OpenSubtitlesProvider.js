@@ -2,11 +2,9 @@
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log } = require('../utils');
-const { warpFetch } = require('../utils/warpFetch');
 const { toAlpha2, toAlpha3B, getDisplayName, getByAnyCode } = require('../languages');
 
 const BASE_URL = 'https://rest.opensubtitles.org';
-const DOWNLOAD_BASE = 'https://dl.opensubtitles.org';
 const USER_AGENT = 'VLSub 0.10.3';
 const TIMEOUT = 12000;
 const REQUEST_DELAY_MS = 250;
@@ -28,7 +26,6 @@ class OpenSubtitlesProvider extends BaseProvider {
     constructor(options = {}) {
         super('opensubtitles', options);
         this.supportedTypes = ['movie', 'series'];
-        this.baseUrl = options.baseUrl || process.env.SUBSENSE_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3100}`;
         this._lastRequestAt = 0;
     }
 
@@ -76,12 +73,13 @@ class OpenSubtitlesProvider extends BaseProvider {
         log('debug', `[OpenSubtitlesProvider] Fetching: ${url}`);
 
         await this._throttle();
-        const response = await warpFetch(url, {
+        const response = await fetch(url, {
             headers: {
                 'X-User-Agent': USER_AGENT,
                 'Accept': 'application/json'
             },
-            signal: AbortSignal.timeout(TIMEOUT)
+            signal: AbortSignal.timeout(TIMEOUT),
+            redirect: 'follow'
         });
 
         if (!response.ok) {
@@ -118,11 +116,11 @@ class OpenSubtitlesProvider extends BaseProvider {
             }
 
             const downloadUrl = this._buildDownloadUrl(entry.SubDownloadLink);
-            const proxyUrl = `${this.baseUrl}/api/opensubtitles/proxy/${id}?url=${encodeURIComponent(downloadUrl)}`;
+            const fmt = (entry.SubFormat || 'srt').toLowerCase();
 
             results.push(new SubtitleResult({
                 id: `os-${id}`,
-                url: proxyUrl,
+                url: `${downloadUrl}.${fmt}`,
                 language: alpha2,
                 languageCode: alpha3B,
                 source: 'opensubtitles',
@@ -133,7 +131,7 @@ class OpenSubtitlesProvider extends BaseProvider {
                 rating: entry.SubRating !== '0.0' ? parseFloat(entry.SubRating) : null,
                 downloadCount: parseInt(entry.SubDownloadsCnt) || null,
                 display: langEntry ? langEntry.name : getDisplayName(iso639),
-                format: (entry.SubFormat || 'srt').toLowerCase(),
+                format: fmt,
                 needsConversion: false
             }));
         }

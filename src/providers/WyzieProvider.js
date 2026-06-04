@@ -229,7 +229,7 @@ const SOURCE_CODENAME_MAP = {
     'ai':      'ai'
 };
 
-const FALLBACK_FREE_SOURCES = 'opensubtitles,tvsubtitles';
+const FALLBACK_FREE_SOURCES = 'opensubtitles,indexsubtitle';
 
 const FALLBACK_SOURCES = [
     'subf2m', 'opensubtitles', 'kitsunekko',
@@ -518,6 +518,16 @@ class WyzieProvider extends BaseProvider {
 
         const response = await this._apiFetch(params, 7500);
 
+        if (response.status === 403) {
+            log('warn', `[WyzieProvider] Key ${apiKey.slice(0, 12)}... returned 403 (invalid), trying next`);
+            this.keyPool.markExhausted(apiKey);
+            const nextKey = this.keyPool.getNextKey();
+            if (nextKey && nextKey !== apiKey) {
+                return this._searchWithServerKey(query, nextKey, languages);
+            }
+            throw new Error('ALL_KEYS_INVALID');
+        }
+
         if (response.status === 429) {
             this.keyPool.markExhausted(apiKey);
             // Try next key
@@ -570,7 +580,7 @@ class WyzieProvider extends BaseProvider {
             signal: AbortSignal.timeout(timeoutMs),
             headers: { 'Accept': 'application/json' }
         });
-        if (!response.ok && response.status !== 429) {
+        if (!response.ok && response.status !== 429 && response.status !== 403) {
             if (response.status === 400) {
                 const body = await response.json().catch(() => ({}));
                 log('info', `[WyzieProvider] HTTP ${response.status} - ${body.message || 'No subtitles found'} - ${body.details || ''}`);

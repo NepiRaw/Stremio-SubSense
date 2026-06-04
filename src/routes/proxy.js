@@ -19,7 +19,7 @@ const express = require('express');
 const cheerio = require('cheerio');
 
 const { log } = require('../../src/utils');
-const { warpFetch, WARP_DOMAINS } = require('../utils/warpFetch');
+const { warpFetch } = require('../utils/warpFetch');
 const {
     extractSubtitleEntries,
     selectSubtitleEntry,
@@ -28,7 +28,6 @@ const {
     bufferToText,
     contentTypeFor
 } = require('../utils/archive');
-const cfCookieManager = require('../utils/cfCookieManager');
 
 /**
  * Fetch with WARP SOCKS5 proxy
@@ -46,11 +45,6 @@ const PROXY_CACHE_TTL_MS = (parseInt(process.env.PROXY_CACHE_TTL_HOURS, 10) || 2
 
 const proxyCache = new Map(); // key -> { content, contentType, headers, storedAt }
 const inflight = new Map();   // key -> Promise<entry>
-
-// OpenSubtitles-dedicated cache: larger pool, longer TTL
-const OS_CACHE_MAX = parseInt(process.env.OS_CACHE_MAX, 10) || 5000;
-const OS_CACHE_TTL_MS = (parseInt(process.env.OS_CACHE_TTL_HOURS, 10) || 48) * 60 * 60 * 1000;
-const osCache = new Map();
 
 function cacheGet(key) {
     const e = proxyCache.get(key);
@@ -71,27 +65,6 @@ function cacheSet(key, entry) {
         proxyCache.delete(oldest);
     }
     proxyCache.set(key, { ...entry, storedAt: Date.now() });
-}
-
-function osCacheGet(key) {
-    const e = osCache.get(key);
-    if (!e) return null;
-    if (Date.now() - e.storedAt > OS_CACHE_TTL_MS) {
-        osCache.delete(key);
-        return null;
-    }
-    osCache.delete(key);
-    osCache.set(key, e);
-    return e;
-}
-
-function osCacheSet(key, entry) {
-    while (osCache.size >= OS_CACHE_MAX) {
-        const oldest = osCache.keys().next().value;
-        if (oldest === undefined) break;
-        osCache.delete(oldest);
-    }
-    osCache.set(key, { ...entry, storedAt: Date.now() });
 }
 
 function dedupe(key, fn) {
@@ -142,12 +115,10 @@ router.get('/subtitle/:format/*', async (req, res) => {
     if (qIdx >= 0) originalUrl = originalUrl.slice(0, qIdx);
     if (!originalUrl) return res.status(400).send('Missing subtitle URL');
 
-    const isOsUrl = originalUrl.includes('dl.opensubtitles.org');
-    const cacheKey = isOsUrl ? `os:generic:${format}:${originalUrl}` : `subtitle:${format}:${originalUrl}`;
+    const cacheKey = `subtitle:${format}:${originalUrl}`;
 
     try {
-        const resolve = isOsUrl ? resolveOsEntry : resolveEntry;
-        const { entry, hit } = await resolve(cacheKey, async () => {
+        const { entry, hit } = await resolveEntry(cacheKey, async () => {
             const proxiedUrl = new URL(originalUrl);
             for (const [k, v] of Object.entries(req.query || {})) {
                 if (v == null || proxiedUrl.searchParams.has(k)) continue;
@@ -161,21 +132,16 @@ router.get('/subtitle/:format/*', async (req, res) => {
                 }
             }
 
-            let buffer;
-            if (isOsUrl) {
-                buffer = await fetchOsBuffer(proxiedUrl.toString());
-            } else {
-                const fetchHeaders = {};
-                const response = await proxyFetch(proxiedUrl.toString(), {
-                    headers: Object.keys(fetchHeaders).length > 0 ? fetchHeaders : undefined
-                });
-                if (!response.ok) {
-                    const err = new Error(`upstream ${response.status}`);
-                    err.status = response.status;
-                    throw err;
-                }
-                buffer = Buffer.from(await response.arrayBuffer());
+            const fetchHeaders = {};
+            const response = await proxyFetch(proxiedUrl.toString(), {
+                headers: Object.keys(fetchHeaders).length > 0 ? fetchHeaders : undefined
+            });
+            if (!response.ok) {
+                const err = new Error(`upstream ${response.status}`);
+                err.status = response.status;
+                throw err;
             }
+            const buffer = Buffer.from(await response.arrayBuffer());
 
             const text = bufferToText(buffer);
             const conv = convertForOutput(text, format);
@@ -718,113 +684,6 @@ async function fetchAnimetoshoXyz(decoded, fmt = 'vtt') {
             'X-SubSense-Original-Format': originalFormat,
             'X-SubSense-Output-Format': conv.outputFormat,
             'X-SubSense-Source': 'animetosho-xyz'
-        }
-    };
-}
-
-// =====================================================
-// OpenSubtitles proxy
-// =====================================================
-
-const OS_USER_AGENT = 'VLSub 0.10.3';
-
-router.get('/opensubtitles/proxy/:subtitleId', async (req, res) => {
-    const { subtitleId } = req.params;
-    const { url: downloadUrl } = req.query;
-    const fmt = pickFmt(req);
-    const cacheKey = `os:${subtitleId}:${fmt}`;
-
-    if (!downloadUrl) return res.status(400).send('Missing download URL');
-
-    try {
-        const { entry, hit } = await resolveOsEntry(cacheKey, () => fetchOpenSubtitles(downloadUrl, fmt));
-        sendCached(res, entry, hit ? 'hit' : 'miss');
-    } catch (err) {
-        log('error', `[proxy/opensubtitles] ${err.message}`);
-        res.status(err.status || 500).send(`OpenSubtitles proxy error: ${err.message}`);
-    }
-});
-
-function resolveOsEntry(cacheKey, build) {
-    return dedupe(cacheKey, async () => {
-        const cached = osCacheGet(cacheKey);
-        if (cached) return { entry: cached, hit: true };
-        const fresh = await build();
-        osCacheSet(cacheKey, fresh);
-        return { entry: fresh, hit: false };
-    });
-}
-
-function isCaptchaResponse(buffer) {
-    if (buffer.length > 50000) return false;
-    const snippet = buffer.slice(0, 2000).toString('utf8').toLowerCase();
-    return snippet.includes('recaptcha') || snippet.includes('anubis') || snippet.includes('cf-challenge');
-}
-
-async function fetchWithCookie(url) {
-    const cookie = cfCookieManager.getNextCookie();
-    if (!cookie) return null;
-
-    const res = await fetch(url, {
-        headers: {
-            'User-Agent': cookie.userAgent,
-            'Cookie': `cf_clearance=${cookie.value}`,
-            'X-User-Agent': OS_USER_AGENT
-        },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(15000)
-    });
-
-    const buffer = Buffer.from(await res.arrayBuffer());
-
-    if (!res.ok || isCaptchaResponse(buffer)) {
-        const reason = isCaptchaResponse(buffer) ? 'captcha' : `status ${res.status}`;
-        log('warn', `[proxy/os] cookie rejected (${reason}), marking failed`);
-        cfCookieManager.markFailed(cookie);
-        return null;
-    }
-
-    return buffer;
-}
-
-async function fetchOsBuffer(url) {
-    let buffer = null;
-
-    if (cfCookieManager.isAvailable()) {
-        buffer = await fetchWithCookie(url).catch(e => { log('warn', `[proxy/os] cookie attempt 1 error: ${e.message}`); return null; });
-        if (!buffer) buffer = await fetchWithCookie(url).catch(e => { log('warn', `[proxy/os] cookie attempt 2 error: ${e.message}`); return null; });
-        if (buffer) log('info', `[proxy/os] downloaded via cookie (${buffer.length}b)`);
-    }
-
-    if (!buffer) {
-        log('info', '[proxy/os] cookies unavailable or failed, trying direct fetch');
-        const dlRes = await fetch(url, {
-            headers: { 'User-Agent': OS_USER_AGENT },
-            redirect: 'follow',
-            signal: AbortSignal.timeout(15000)
-        });
-        buffer = Buffer.from(await dlRes.arrayBuffer());
-        if (!dlRes.ok || isCaptchaResponse(buffer)) {
-            const err = new Error(`upstream ${dlRes.status}`);
-            err.status = isCaptchaResponse(buffer) ? 403 : dlRes.status;
-            throw err;
-        }
-    }
-
-    return buffer;
-}
-
-async function fetchOpenSubtitles(downloadUrl, fmt = 'vtt') {
-    const buffer = await fetchOsBuffer(downloadUrl);
-
-    const text = bufferToText(buffer);
-    const conv = convertForOutput(text, fmt);
-    return {
-        content: conv.content,
-        contentType: contentTypeFor(conv.outputFormat),
-        headers: {
-            'X-OpenSubtitles-Original-Format': conv.originalFormat,
-            'X-OpenSubtitles-Output-Format': conv.outputFormat
         }
     };
 }

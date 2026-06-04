@@ -105,7 +105,9 @@ function formatForStremio(subtitles, opts = {}) {
         };
 
         if (isAss) {
-            if (keepAss) {
+            if (sub.needsConversion === false) {
+                emit(format, sourceUrl);
+            } else if (keepAss) {
                 emit('ass', assProxyUrl(sourceUrl));
                 emit('vtt', vttProxyUrl(sourceUrl));
             } else {
