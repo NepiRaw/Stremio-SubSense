@@ -363,9 +363,9 @@ class WyzieProvider extends BaseProvider {
     constructor(options = {}) {
         super('wyzie', options);
         this.keyPool = WyzieKeyPool.fromEnv();
-        // In-memory pool: content key → { subtitles: SubtitleResult[], timestamp }
         this._pool = new Map();
-        this._keyTypeCache = new Map(); // apiKey → keyType string
+        this._keyTypeCache = new Map();
+        this._inflight = new Map();
     }
 
     async initialize() {
@@ -445,7 +445,19 @@ class WyzieProvider extends BaseProvider {
                         apiResult = await this._searchWithServerKey(query, apiKey, languages);
                     }
                 } catch (apiErr) {
-                    log('warn', `[WyzieProvider] API failed (dump fallback): ${apiErr.message}`);
+                    if (!keySelection.isUserKey && (apiErr.message === 'KEY_INVALID_403' || apiErr.message === 'RATE_LIMITED')) {
+                        const nextKey = this.keyPool.getNextKey();
+                        if (nextKey && nextKey !== keySelection.key) {
+                            try {
+                                apiResult = await this._searchWithServerKey(query, nextKey, languages);
+                            } catch (retryErr) {
+                                log('warn', `[WyzieProvider] Retry key also failed: ${retryErr.message}`);
+                            }
+                        }
+                    }
+                    if (apiResult.subtitles.length === 0) {
+                        log('warn', `[WyzieProvider] API failed (dump fallback): ${apiErr.message}`);
+                    }
                 }
             } else {
                 log('warn', '[WyzieProvider] No API key available');
@@ -515,41 +527,60 @@ class WyzieProvider extends BaseProvider {
     async _searchWithServerKey(query, apiKey, languages) {
         const sources = await this._getSourcesForKey(apiKey);
         const params = this._buildUrlParams(query, sources, apiKey);
+        const poolKey = this._poolKey(query);
 
-        const response = await this._apiFetch(params, 7500);
+        const fetchPromise = this._apiFetch(params, 25000)
+            .then(async (response) => {
+                if (response.status === 403) {
+                    this.keyPool.markExhausted(apiKey);
+                    throw new Error('KEY_INVALID_403');
+                }
+                if (response.status === 429) {
+                    this.keyPool.markExhausted(apiKey);
+                    throw new Error('RATE_LIMITED');
+                }
+                this._updateKeyFromHeaders(apiKey, response.headers);
+                const results = await response.json();
+                return this._processResults(results);
+            });
 
-        if (response.status === 403) {
-            log('warn', `[WyzieProvider] Key ${apiKey.slice(0, 12)}... returned 403 (invalid), trying next`);
-            this.keyPool.markExhausted(apiKey);
-            const nextKey = this.keyPool.getNextKey();
-            if (nextKey && nextKey !== apiKey) {
-                return this._searchWithServerKey(query, nextKey, languages);
-            }
-            throw new Error('ALL_KEYS_INVALID');
+        const DISPLAY_DEADLINE_MS = 7500;
+        const deadline = new Promise(resolve =>
+            setTimeout(() => resolve(null), DISPLAY_DEADLINE_MS)
+        );
+
+        const raceResult = await Promise.race([fetchPromise, deadline]);
+
+        if (raceResult !== null) {
+            const allSubs = raceResult;
+            this._poolSet(poolKey, allSubs);
+            this._inflight.delete(poolKey);
+
+            const filtered = languages.length > 0
+                ? this._filterByLanguages(allSubs, languages)
+                : allSubs;
+
+            log('info', `[WyzieProvider] Server key: ${allSubs.length} total, ${filtered.length} filtered for [${languages.join(',')}]`);
+            return { subtitles: filtered, backgroundPromise: null };
         }
 
-        if (response.status === 429) {
-            this.keyPool.markExhausted(apiKey);
-            // Try next key
-            const nextKey = this.keyPool.getNextKey();
-            if (nextKey && nextKey !== apiKey) {
-                return this._searchWithServerKey(query, nextKey, languages);
-            }
-            throw new Error('RATE_LIMITED');
+        if (!this._inflight.has(poolKey)) {
+            const bgPromise = fetchPromise
+                .then(allSubs => {
+                    this._poolSet(poolKey, allSubs);
+                    log('info', `[WyzieProvider] Background fetch done: ${allSubs.length} subs cached for ${query.imdbId}`);
+                })
+                .catch(err => {
+                    log('debug', `[WyzieProvider] Background fetch failed: ${err.message}`);
+                })
+                .finally(() => {
+                    this._inflight.delete(poolKey);
+                });
+            this._inflight.set(poolKey, bgPromise);
         }
 
-        this._updateKeyFromHeaders(apiKey, response.headers);
-        const results = await response.json();
-        const allSubs = this._processResults(results);
-
-        this._poolSet(this._poolKey(query), allSubs);
-
-        const filtered = languages.length > 0
-            ? this._filterByLanguages(allSubs, languages)
-            : allSubs;
-
-        log('info', `[WyzieProvider] Server key: ${allSubs.length} total, ${filtered.length} filtered for [${languages.join(',')}]`);
-        return { subtitles: filtered, backgroundPromise: null };
+        log('info', `[WyzieProvider] Display deadline hit (${DISPLAY_DEADLINE_MS}ms), deferring to dump`);
+        throw new Error('DISPLAY_TIMEOUT');
     }
 
     // =====================================================
@@ -734,12 +765,14 @@ class WyzieProvider extends BaseProvider {
 
     clearCache() {
         this._pool.clear();
+        this._inflight.clear();
         log('debug', '[WyzieProvider] Pool cache cleared');
     }
 
     getCacheStats() {
         return {
             poolSize: this._pool.size,
+            inflightSize: this._inflight.size,
             poolMaxEntries: POOL_MAX_ENTRIES,
             poolTtlMs: POOL_TTL_MS,
             keyPool: this.keyPool.getStatus()
