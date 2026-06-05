@@ -20,6 +20,7 @@ const cheerio = require('cheerio');
 
 const { log } = require('../../src/utils');
 const { warpFetch } = require('../utils/warpFetch');
+const { subdlFetch } = require('../utils/subdlFetch');
 const {
     extractSubtitleEntries,
     selectSubtitleEntry,
@@ -40,7 +41,7 @@ let decryptConfig = null;
 try { decryptConfig = require('../../src/utils/crypto').decryptConfig; }
 catch (_) { log('warn', '[proxy] crypto unavailable; SubSource downloads will be limited'); }
 
-const PROXY_CACHE_MAX = parseInt(process.env.PROXY_CACHE_MAX, 10) || 500;
+const PROXY_CACHE_MAX = parseInt(process.env.PROXY_CACHE_MAX, 10) || 5000;
 const PROXY_CACHE_TTL_MS = (parseInt(process.env.PROXY_CACHE_TTL_HOURS, 10) || 24) * 60 * 60 * 1000;
 
 const proxyCache = new Map(); // key -> { content, contentType, headers, storedAt }
@@ -475,7 +476,7 @@ router.get('/subdl/proxy/*', async (req, res) => {
 
 async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' }) {
     const downloadUrl = `https://dl.subdl.com/${subdlPath}`;
-    const dlRes = await proxyFetch(downloadUrl, {
+    const dlRes = await subdlFetch(downloadUrl, {
         headers: { 'User-Agent': 'SubSense/2.0' }
     });
     if (!dlRes.ok) {

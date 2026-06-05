@@ -17,7 +17,7 @@ if (WARP_PROXY_URL) {
     }
 }
 
-const WARP_DOMAINS = new Set((process.env.WARP_DOMAINS || 'dl.subdl.com').split(',').map(d => d.trim()).filter(Boolean));
+const WARP_DOMAINS = new Set((process.env.WARP_DOMAINS || '').split(',').map(d => d.trim()).filter(Boolean));
 
 function warpFetch(url, options = {}) {
     if (!warpAgent) return fetch(url, options);
