@@ -20,7 +20,7 @@ const REQUEST_DELAY_MS = 250;
  * 
  * Download URL transform:
  *   Raw: https://dl.opensubtitles.org/en/download/src-api/vrf-{vrf}/file/{id}.gz
- *   UTF8: https://dl.opensubtitles.org/en/download/subencoding-utf8/src-api/vrf-{vrf}/file/{id}
+ *   Direct: https://dl.opensubtitles.org/en/download/src-api/vrf-{vrf}/file/{id}
  */
 class OpenSubtitlesProvider extends BaseProvider {
     constructor(options = {}) {
@@ -115,12 +115,12 @@ class OpenSubtitlesProvider extends BaseProvider {
                 if (!matchesFilter) continue;
             }
 
-            const downloadUrl = this._buildDownloadUrl(entry.SubDownloadLink);
             const fmt = (entry.SubFormat || 'srt').toLowerCase();
+            const downloadUrl = this._buildDownloadUrl(entry.SubDownloadLink, fmt);
 
             results.push(new SubtitleResult({
                 id: `os-${id}`,
-                url: `${downloadUrl}.${fmt}`,
+                url: downloadUrl,
                 language: alpha2,
                 languageCode: alpha3B,
                 source: 'opensubtitles',
@@ -141,15 +141,12 @@ class OpenSubtitlesProvider extends BaseProvider {
     }
 
     /**
-     * Build a UTF-8 direct download URL from the raw SubDownloadLink.
-     * Raw:  https://dl.opensubtitles.org/en/download/src-api/vrf-{vrf}/file/{id}.gz
-     * UTF8: https://dl.opensubtitles.org/en/download/subencoding-utf8/src-api/vrf-{vrf}/file/{id}
+     * Build a direct download URL from the raw SubDownloadLink.
+     * Strips .gz extension and appends format extension.
      */
-    _buildDownloadUrl(rawUrl) {
+    _buildDownloadUrl(rawUrl, format = 'srt') {
         if (!rawUrl) return null;
-        return rawUrl
-            .replace(/\.gz$/, '')
-            .replace('/download/', '/download/subencoding-utf8/');
+        return rawUrl.replace(/\.gz$/, '') + '.' + format;
     }
 
     /**

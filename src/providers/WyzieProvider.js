@@ -720,9 +720,16 @@ class WyzieProvider extends BaseProvider {
 
         const langCode = sub.lang || sub.language || 'und';
         const language = langCode.substring(0, 2).toLowerCase();
-        const formatInfo = this._detectFormatFromUrl(sub.url);
+        let formatInfo = this._detectFormatFromUrl(sub.url);
         const rawFileName = sub.fileName || null;
         const fileName = this._isUsefulFileName(rawFileName) ? rawFileName : null;
+
+        if (!formatInfo.format && rawFileName) {
+            const fileFormat = this._detectFormatFromFileName(rawFileName);
+            if (fileFormat) {
+                formatInfo = { format: fileFormat.format, needsConversion: formatInfo.needsConversion };
+            }
+        }
 
         return new SubtitleResult({
             id: sub.id || `wyzie-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -747,6 +754,7 @@ class WyzieProvider extends BaseProvider {
 
     _detectFormatFromUrl(url) {
         if (!url) return { format: null, needsConversion: null };
+        if (url.includes('dl.opensubtitles.org/')) return { format: null, needsConversion: false };
         const formatMatch = url.match(/[?&]format=([^&]+)/i);
         const formatParam = formatMatch ? formatMatch[1].toLowerCase() : null;
         const extMatch = url.match(/\.([a-z0-9]+)(?:\?|$)/i);
@@ -757,6 +765,18 @@ class WyzieProvider extends BaseProvider {
         if (formatParam === 'vtt' || extension === 'vtt') return { format: 'vtt', needsConversion: false };
         if (formatParam === 'sub' || extension === 'sub') return { format: 'sub', needsConversion: false };
         return { format: null, needsConversion: null };
+    }
+
+    _detectFormatFromFileName(fileName) {
+        if (!fileName) return null;
+        const ext = fileName.match(/\.(srt|ass|ssa|vtt|sub)$/i);
+        if (!ext) return null;
+        const fmt = ext[1].toLowerCase();
+        if (fmt === 'srt') return { format: 'srt', needsConversion: false };
+        if (fmt === 'ass' || fmt === 'ssa') return { format: 'ass', needsConversion: true };
+        if (fmt === 'vtt') return { format: 'vtt', needsConversion: false };
+        if (fmt === 'sub') return { format: 'sub', needsConversion: false };
+        return null;
     }
 
     // =====================================================

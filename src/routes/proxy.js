@@ -163,7 +163,9 @@ router.get('/subtitle/:format/*', async (req, res) => {
 });
 
 function pickFmt(req) {
-    return (req && req.query && req.query.fmt === 'ass') ? 'ass' : 'vtt';
+    const fmt = req && req.query && req.query.fmt;
+    if (Array.isArray(fmt)) return fmt.includes('ass') ? 'ass' : 'vtt';
+    return fmt === 'ass' ? 'ass' : 'vtt';
 }
 
 router.get('/yify/proxy/:subtitleId', async (req, res) => {

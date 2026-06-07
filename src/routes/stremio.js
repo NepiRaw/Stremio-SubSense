@@ -45,6 +45,7 @@ router.get('/:config/subtitles/:type/:id/:extra?.json', async (req, res) => {
         const { userId, config: rawConfig } = parseConfigParam(req.params.config);
         const validatedConfig = parseConfig(rawConfig || {}, { userId });
         if (userId) validatedConfig.userId = userId;
+        validatedConfig._userAgent = req.headers['user-agent'] || '';
         const args = {
             type: req.params.type,
             id: req.params.id,

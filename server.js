@@ -14,6 +14,7 @@ const { preloadParser } = require('./src/utils/filenameMatcher');
 const { initWyzieSources } = require('./src/providers/WyzieProvider');
 const { init: initAnimeLists } = require('./src/utils/animeLists');
 const { initAnidbCache, isAnidbConfigured } = require('./src/utils/anidbApi');
+const { initDetailCache } = require('./src/utils/animetoshoApi');
 
 const { registerDefaultProviders } = require('./src/providers');
 const { warmupResponseCache } = require('./src/handlers/subtitles');
@@ -80,6 +81,10 @@ async function bootstrap() {
     } else {
         log('info', '[server] AniDB not configured (ANIDB_CLIENT / ANIDB_CLIENT_VER not set) — AnimeTosho TV episode search disabled, movies still available');
     }
+
+    initTasks.push(
+        initDetailCache(db).catch((err) => log('warn', `[server] AT detail cache init failed: ${err.message}`))
+    );
 
     await Promise.allSettled(initTasks);
 

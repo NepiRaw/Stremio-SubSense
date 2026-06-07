@@ -18,6 +18,57 @@ try {
 const responseCache = new ResponseCache();
 const subtitleCache = new SubtitleCache();
 
+const STREMIO_UA_RE = /stremio|com\.stremio|libmpv/i;
+const OS_DIRECT_URL_RE = /^https?:\/\/dl\.opensubtitles\.org\//;
+const OS_PROXIED_URL_RE = /\/api\/subtitle\/(?:vtt|srt|ass)\/(https?:\/\/dl\.opensubtitles\.org\/[^\s]+)/;
+
+/**
+ * Detect if the request comes from a Stremio app (has streaming server on 11470).
+ * Strict: only returns true when UA explicitly identifies as Stremio.
+ */
+function isStremioClient(userAgent) {
+    return STREMIO_UA_RE.test(userAgent || '');
+}
+
+/**
+ * Extract the raw OS download URL, whether it's direct or wrapped in a proxy path.
+ */
+function extractOsUrl(url) {
+    if (!url) return null;
+    if (OS_DIRECT_URL_RE.test(url)) return url;
+    const match = url.match(OS_PROXIED_URL_RE);
+    if (match) return match[1];
+    return null;
+}
+
+/**
+ * Determine subtitle format from URL extension.
+ */
+function getSubtitleFormat(url) {
+    const ext = url.match(/\.(\w+)$/)?.[1]?.toLowerCase();
+    if (ext === 'ass' || ext === 'ssa') return 'ass';
+    if (ext === 'vtt') return 'vtt';
+    return 'srt';
+}
+
+/**
+ * Wrap OpenSubtitles URLs with the Stremio local streaming server,
+ * or unwrap proxy-wrapped OS URLs for non-Stremio clients.
+ */
+function applyStreamingServerWrap(subtitles, userAgent) {
+    const isStremio = isStremioClient(userAgent);
+    return subtitles.map(sub => {
+        const osUrl = extractOsUrl(sub.url);
+        if (!osUrl) return sub;
+        if (isStremio) {
+            const fmt = getSubtitleFormat(osUrl);
+            return { ...sub, url: `http://127.0.0.1:11470/subtitles.${fmt}?from=${encodeURIComponent(osUrl)}` };
+        }
+        if (sub.url !== osUrl) return { ...sub, url: osUrl };
+        return sub;
+    });
+}
+
 /**
  * Resolve a subtitle request end-to-end.
  *
@@ -34,6 +85,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const parsed = parseStremioId(args.id);
     const languages = parsedConfig.languages || [];
     const wyzieLanguages = languages.map(mapStremioToWyzie).filter(Boolean);
+    const userAgent = parsedConfig._userAgent || '';
     const filename = (args.extra && args.extra.filename) || null;
     const apiKey = parsedConfig.subsourceApiKey || null;
     const subdlApiKey = parsedConfig.subdlApiKey || null;
@@ -45,7 +97,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const sessionInfo = parsedConfig.userId ? `session=${parsedConfig.userId}` : 'no-session';
     const idTag = `${parsed.imdbId}${parsed.season != null ? `:${parsed.season}:${parsed.episode}` : ''}`;
     log('info', `[Request] ${sessionInfo} ${parsed.type} ${idTag} langs=[${languages.join(',')}]${filename ? ` file="${filename}"` : ''}`);
-
+    if (userAgent) log('debug', `[Request] UA: ${userAgent.substring(0, 120)} stremio=${isStremioClient(userAgent)}`);
     const cacheKey = ResponseCache.buildKey(
         parsed.imdbId,
         parsed.season,
@@ -74,7 +126,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         }
         const validated = await validateWyzieUrls(cached.subtitles);
         fireTrack(parsedConfig, parsed, languages, validated, Date.now() - startedAt, true);
-        return { subtitles: validated };
+        return { subtitles: applyStreamingServerWrap(validated, userAgent) };
     }
 
     // L2 fallback: language-agnostic lookup before hitting providers
@@ -87,7 +139,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
             `[handler] l2-hit ${reqTag(parsed, wyzieLanguages)} -> ${l2Hit.subtitles.length} subs (returning ${returnedL2.length}) in ${Date.now() - startedAt}ms`);
         const validated = await validateWyzieUrls(returnedL2);
         fireTrack(parsedConfig, parsed, languages, validated, Date.now() - startedAt, true);
-        return { subtitles: validated };
+        return { subtitles: applyStreamingServerWrap(validated, userAgent) };
     }
 
     const result = await providerManager.searchAll(
@@ -124,7 +176,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
 
     const returnedSubs = finalSubs ? finalSubs.subtitles : formatted;
     fireTrack(parsedConfig, parsed, languages, returnedSubs, Date.now() - startedAt, false, languageMatch);
-    return { subtitles: returnedSubs };
+    return { subtitles: applyStreamingServerWrap(returnedSubs, userAgent) };
 }
 
 function fireTrack(parsedConfig, parsed, languages, subtitles, fetchTimeMs, cacheHit, languageMatch) {

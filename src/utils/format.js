@@ -164,7 +164,10 @@ function assProxyUrl(sourceUrl) {
 }
 
 function appendQuery(url, key, value) {
-    return url + (url.includes('?') ? '&' : '?') + `${key}=${encodeURIComponent(value)}`;
+    const encoded = encodeURIComponent(value);
+    const re = new RegExp(`([?&])${key}=[^&]*`);
+    if (re.test(url)) return url.replace(re, `$1${key}=${encoded}`);
+    return url + (url.includes('?') ? '&' : '?') + `${key}=${encoded}`;
 }
 
 function withSubsourcePlaceholder(url) {

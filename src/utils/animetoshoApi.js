@@ -9,8 +9,12 @@
  *   ?q=X         — keyword search (fallback)
  *   ?show=torrent&id=X — full torrent detail with file attachments
  *
- * Rate limit: ~1 request per 2.4s per IP for detail fetches.
- * Uses a global sequential queue to respect rate limits across all callers.
+ * Rate limit: Datacenter IPs get hard 429 rejections.
+ * Uses a global sequential queue with adaptive backoff:
+ *   - Base interval: 7s between requests
+ *   - On 429: retry up to 3 times at 2s intervals
+ *   - If all retries fail: penalty +10s per consecutive failure (cap 37s total)
+ *   - On success: reset to base interval
  */
 
 const { log } = require('../utils');
@@ -19,27 +23,72 @@ const FEED_URL = 'https://feed.animetosho.org/json';
 const STORAGE_URL = 'https://storage.animetosho.org/attach';
 const FETCH_TIMEOUT_MS = 15000;
 const USER_AGENT = 'SubSense-Stremio/2.0';
-const RATE_LIMIT_MS = 2500; // minimum ms between detail requests
+
+const BASE_RATE_MS = 7000;
+const RETRY_DELAY_MS = 2000;
+const MAX_RETRIES = 3;
+const PENALTY_BACKOFF_MS = 10000;
 
 /**
- * Global sequential queue for rate-limited detail requests.
- * Ensures only one detail fetch runs at a time with minimum spacing.
+ * Global sequential queue for all AnimeTosho requests.
+ * Serializes requests with adaptive spacing based on 429 responses.
  */
-let detailQueue = Promise.resolve();
-let lastDetailTime = 0;
+let gatePromise = Promise.resolve();
+let lastRequestTime = 0;
+let currentInterval = BASE_RATE_MS;
+let consecutiveFailures = 0;
 
-function enqueueDetailFetch(torrentId) {
-    const task = detailQueue.then(async () => {
+function enqueueRequest(fn) {
+    const gate = gatePromise.then(async () => {
         const now = Date.now();
-        const elapsed = now - lastDetailTime;
-        if (elapsed < RATE_LIMIT_MS) {
-            await new Promise(r => setTimeout(r, RATE_LIMIT_MS - elapsed));
+        const elapsed = now - lastRequestTime;
+        if (elapsed < currentInterval) {
+            await new Promise(r => setTimeout(r, currentInterval - elapsed));
         }
-        lastDetailTime = Date.now();
-        return _fetchTorrentDetail(torrentId);
+        lastRequestTime = Date.now();
     });
-    detailQueue = task.catch(() => {});
-    return task;
+    gatePromise = gate.catch(() => {});
+    return gate.then(() => fn());
+}
+
+// --- Persistent detail cache (SQLite) ---
+let _db = null;
+
+/**
+ * Initialize the torrent detail cache table.
+ * Call once at startup with the shared libSQL database instance.
+ */
+async function initDetailCache(database) {
+    _db = database;
+    await _db.executeMultiple(`
+        CREATE TABLE IF NOT EXISTS at_torrent_details (
+            torrent_id  INTEGER PRIMARY KEY,
+            data        TEXT NOT NULL,
+            created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+    `);
+    log('info', '[AT-API] Detail cache table initialized');
+}
+
+async function _getCachedDetail(torrentId) {
+    if (!_db) return null;
+    try {
+        const row = await _db.execute('SELECT data FROM at_torrent_details WHERE torrent_id = ?', [torrentId]);
+        if (row.rows.length === 0) return null;
+        return JSON.parse(row.rows[0].data);
+    } catch { return null; }
+}
+
+async function _setCachedDetail(torrentId, data) {
+    if (!_db || !data) return;
+    try {
+        await _db.execute(
+            'INSERT OR REPLACE INTO at_torrent_details (torrent_id, data) VALUES (?, ?)',
+            [torrentId, JSON.stringify(data)]
+        );
+    } catch (err) {
+        log('debug', `[AT-API] Cache write failed for ${torrentId}: ${err.message}`);
+    }
 }
 
 /**
@@ -48,7 +97,7 @@ function enqueueDetailFetch(torrentId) {
  * Returns ALL entries containing this episode (including batch packs).
  */
 async function searchByEpisodeId(eid) {
-    return fetchEntries(`${FEED_URL}?eids=${eid}`);
+    return enqueueRequest(() => fetchEntries(`${FEED_URL}?eids=${eid}`));
 }
 
 /**
@@ -56,38 +105,28 @@ async function searchByEpisodeId(eid) {
  * Used for MOVIES (no eid needed).
  */
 async function searchByAnidbId(anidbId) {
-    return fetchEntries(`${FEED_URL}?aids=${anidbId}`);
+    return enqueueRequest(() => fetchEntries(`${FEED_URL}?aids=${anidbId}`));
 }
 
 /**
  * Get full torrent details including file attachments (subtitles, fonts).
- * Queued to respect AnimeTosho's rate limit (~1 req/2.4s).
- *
- * Response shape:
- *   { ..., files: [{ filename, size, attachments: [{ id, type, info, size }] }] }
- *
- * attachment.type: "subtitle" | "font" | "chapter" | ...
- * attachment.info: { lang, codec, name, tracknum } (for subtitles)
+ * Checks persistent SQLite cache first - torrent details are immutable.
+ * Falls back to rate-limited API fetch with retry on 429.
  */
-function getTorrentDetail(torrentId) {
-    return enqueueDetailFetch(torrentId);
+async function getTorrentDetail(torrentId) {
+    const cached = await _getCachedDetail(torrentId);
+    if (cached) return cached;
+    return enqueueRequest(async () => {
+        const data = await _fetchTorrentDetail(torrentId);
+        if (data) await _setCachedDetail(torrentId, data);
+        return data;
+    });
 }
 
 async function _fetchTorrentDetail(torrentId) {
-    try {
-        const response = await fetch(`${FEED_URL}?show=torrent&id=${torrentId}`, {
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { 'User-Agent': USER_AGENT }
-        });
-        if (!response.ok) {
-            log('warn', `[AT-API] Detail ${torrentId}: HTTP ${response.status}`);
-            return null;
-        }
-        return await response.json();
-    } catch (err) {
-        log('error', `[AT-API] Detail ${torrentId}: ${err.message}`);
-        return null;
-    }
+    const url = `${FEED_URL}?show=torrent&id=${torrentId}`;
+    const result = await _fetchWithRetry(url, `Detail ${torrentId}`);
+    return result;
 }
 
 /**
@@ -107,31 +146,63 @@ function buildProxyUrl(baseUrl, attachmentId, fmt) {
 }
 
 async function fetchEntries(url) {
-    try {
-        const response = await fetch(url, {
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { 'User-Agent': USER_AGENT }
-        });
-        if (!response.ok) {
-            log('warn', `[AT-API] ${url}: HTTP ${response.status}`);
-            return [];
-        }
-        const data = await response.json();
-        if (!Array.isArray(data)) return [];
+    const data = await _fetchWithRetry(url, url);
+    if (!data) return [];
+    if (!Array.isArray(data)) return [];
+    return data.filter(e => e.status === 'complete').sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+}
 
-        return data
-            .filter(e => e.status === 'complete')
-            .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    } catch (err) {
-        log('error', `[AT-API] Fetch error: ${err.message}`);
-        return [];
+/**
+ * Core fetch with retry logic for 429 handling.
+ * Retries up to MAX_RETRIES times at RETRY_DELAY_MS intervals.
+ * If all retries fail, applies penalty backoff for next queue item.
+ * Returns parsed JSON or null on failure.
+ */
+async function _fetchWithRetry(url, label) {
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            if (attempt > 0) {
+                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                lastRequestTime = Date.now();
+            }
+            const response = await fetch(url, {
+                signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+                headers: { 'User-Agent': USER_AGENT }
+            });
+            if (response.status === 429) {
+                if (attempt < MAX_RETRIES) {
+                    log('debug', `[AT-API] ${label}: 429, retry ${attempt + 1}/${MAX_RETRIES}`);
+                    continue;
+                }
+                consecutiveFailures++;
+                const penalty = Math.min(PENALTY_BACKOFF_MS * consecutiveFailures, 30000);
+                currentInterval = BASE_RATE_MS + penalty;
+                log('warn', `[AT-API] ${label}: 429 after ${MAX_RETRIES} retries, backoff ${currentInterval}ms`);
+                return null;
+            }
+            if (!response.ok) {
+                log('warn', `[AT-API] ${label}: HTTP ${response.status}`);
+                return null;
+            }
+            consecutiveFailures = 0;
+            currentInterval = BASE_RATE_MS;
+            return await response.json();
+        } catch (err) {
+            if (attempt === MAX_RETRIES) {
+                log('error', `[AT-API] ${label}: ${err.message}`);
+                return null;
+            }
+            log('debug', `[AT-API] ${label}: ${err.message}, retry ${attempt + 1}/${MAX_RETRIES}`);
+        }
     }
+    return null;
 }
 
 module.exports = {
     searchByEpisodeId,
     searchByAnidbId,
     getTorrentDetail,
+    initDetailCache,
     buildAttachmentUrl,
     buildProxyUrl,
     STORAGE_URL,
