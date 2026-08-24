@@ -16,6 +16,16 @@ function toAlpha3B(code) {
     return _toAlpha3B(code);
 }
 
+function intEnv(name, fallback) {
+    const v = parseInt(process.env[name], 10);
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+const SOURCE_SCAN_BATCH        = intEnv('STATS_SOURCE_SCAN_BATCH', 2000);
+const SOURCE_SCAN_INTERVAL_MS  = intEnv('STATS_SOURCE_SCAN_INTERVAL_MS', 6 * 60 * 60 * 1000);
+const LOG_RETENTION_DAYS       = intEnv('STATS_LOG_RETENTION_DAYS', 30);
+const LOG_PRUNE_BATCH          = intEnv('STATS_LOG_PRUNE_BATCH', 5000);
+
 function getLocalDateString() {
     const now = new Date();
     const y = now.getFullYear();
@@ -32,6 +42,7 @@ class StatsDBAsync {
     constructor(writesEnabled, minimalEnabled) {
         this._writesEnabled  = writesEnabled  || (() => true);
         this._minimalEnabled = minimalEnabled || (() => true);
+        this._lastSourceScanAt = 0;
     }
 
     /* ------------------------------------------------------------------ */
@@ -452,11 +463,59 @@ class StatsDBAsync {
         };
     }
 
+    /**
+     * Source distribution is the only figure that needs every cached blob, so it is scanned
+     * on its own slow cadence and reused from the stored summary in between.
+     */
+    async _resolveSourceDistribution(lastRow) {
+        const due = Date.now() - this._lastSourceScanAt >= SOURCE_SCAN_INTERVAL_MS;
+        if (!due) {
+            try {
+                const cached = JSON.parse(lastRow?.source_distribution || '{}');
+                if (cached && typeof cached === 'object') return cached;
+            } catch (_) { /* fall through to a fresh scan */ }
+        }
+        const dist = await this._scanSourceDistribution();
+        this._lastSourceScanAt = Date.now();
+        return dist;
+    }
+
+    /** Walk subtitle_cache by rowid so peak heap stays proportional to one batch, not the table. */
+    async _scanSourceDistribution() {
+        const dist = {};
+        let lastRowid = 0;
+        let scanned = 0;
+
+        for (;;) {
+            const batch = await db.execute(
+                'SELECT rowid AS rid, subtitles FROM subtitle_cache WHERE rowid > ? ORDER BY rowid LIMIT ?',
+                [lastRowid, SOURCE_SCAN_BATCH]
+            );
+            if (batch.rows.length === 0) break;
+
+            for (const row of batch.rows) {
+                lastRowid = Number(row.rid);
+                try {
+                    for (const s of JSON.parse(row.subtitles || '[]')) {
+                        if (s.source) dist[s.source] = (dist[s.source] || 0) + 1;
+                    }
+                } catch (_) { /* skip malformed rows */ }
+            }
+            scanned += batch.rows.length;
+
+            if (batch.rows.length < SOURCE_SCAN_BATCH) break;
+            await new Promise(resolve => setImmediate(resolve));
+        }
+
+        log('debug', `[StatsDB] source scan covered ${scanned} rows`);
+        return dist;
+    }
+
     async recomputeSummary({ force = false } = {}) {
         const start = Date.now();
         try {
             const [lastSummary, currentMax] = await Promise.all([
-                db.execute('SELECT newest_timestamp, total_entries FROM cache_stats_summary WHERE id = 1'),
+                db.execute('SELECT newest_timestamp, total_entries, source_distribution FROM cache_stats_summary WHERE id = 1'),
                 db.execute('SELECT MAX(updated_at) as max_ts, COUNT(*) as cnt FROM subtitle_cache')
             ]);
             const lastNewest = lastSummary.rows[0]?.newest_timestamp || 0;
@@ -478,10 +537,9 @@ class StatsDBAsync {
                        AVG(strftime('%s','now') - updated_at) as avg_age_seconds
                 FROM subtitle_cache
             `);
-            const [langResult, sizeResult, subsResult] = await Promise.all([
+            const [langResult, sizeResult] = await Promise.all([
                 db.execute(`SELECT lang_key, COUNT(*) as count FROM subtitle_cache WHERE lang_key IS NOT NULL GROUP BY lang_key ORDER BY count DESC`),
-                db.execute('SELECT page_count * page_size as size_bytes FROM pragma_page_count(), pragma_page_size()'),
-                db.execute('SELECT subtitles FROM subtitle_cache')
+                db.execute('SELECT page_count * page_size as size_bytes FROM pragma_page_count(), pragma_page_size()')
             ]);
             const c = combined.rows[0];
             const langDist = {};
@@ -493,15 +551,7 @@ class StatsDBAsync {
                     if (trimmed) langDist[trimmed] = (langDist[trimmed] || 0) + r.count;
                 }
             });
-            const sourceDist = {};
-            for (const row of subsResult.rows) {
-                try {
-                    const subs = JSON.parse(row.subtitles || '[]');
-                    for (const s of subs) {
-                        if (s.source) sourceDist[s.source] = (sourceDist[s.source] || 0) + 1;
-                    }
-                } catch (_) {}
-            }
+            const sourceDist = await this._resolveSourceDistribution(lastSummary.rows[0]);
             const uniqueSources = Object.keys(sourceDist).length;
             const sizeBytes = sizeResult.rows[0]?.size_bytes || 0;
             const hr = await this.getCacheHitRate();
@@ -842,6 +892,49 @@ class StatsDBAsync {
             log('error', `[StatsDB] cleanupInactiveUsers error: ${err.message}`);
             return 0;
         }
+    }
+
+    /**
+     * Enforce retention on the append-only log tables. Both are written on every request and
+     * nothing else deletes from them, so without this they grow without bound.
+     */
+    async pruneLogs({ retentionDays = LOG_RETENTION_DAYS } = {}) {
+        const cutoffSeconds = retentionDays * 24 * 60 * 60;
+        const targets = [
+            { table: 'request_log',      column: 'created_at' },
+            { table: 'user_content_log', column: 'requested_at' }
+        ];
+        let total = 0;
+
+        for (const { table, column } of targets) {
+            let removed = 0;
+            for (;;) {
+                let deleted;
+                try {
+                    const r = await db.execute(`
+                        DELETE FROM ${table}
+                        WHERE rowid IN (
+                            SELECT rowid FROM ${table}
+                            WHERE ${column} < (strftime('%s','now') - ?)
+                            LIMIT ?
+                        )
+                    `, [cutoffSeconds, LOG_PRUNE_BATCH]);
+                    deleted = Number(r.rowsAffected) || 0;
+                } catch (err) {
+                    log('error', `[StatsDB] pruneLogs ${table} batch failed: ${err.message}`);
+                    break;
+                }
+
+                removed += deleted;
+                if (deleted < LOG_PRUNE_BATCH) break;
+                await new Promise(resolve => setImmediate(resolve));
+            }
+
+            if (removed > 0) log('info', `[StatsDB] pruned ${removed} rows from ${table} (>${retentionDays}d)`);
+            total += removed;
+        }
+
+        return total;
     }
 }
 

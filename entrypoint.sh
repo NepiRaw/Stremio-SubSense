@@ -67,4 +67,4 @@ else
     echo "[WARP] Disabled (set WARP_ENABLED=true to enable)"
 fi
 
-exec npm start
+exec "$@"

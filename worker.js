@@ -28,6 +28,7 @@ const CLEANUP_INTERVAL_MS    = intEnv('WORKER_CLEANUP_INTERVAL_MS',    2 * 60 * 
 const CHECKPOINT_INTERVAL_MS = intEnv('WORKER_CHECKPOINT_INTERVAL_MS', 30 * 60 * 1000);
 const OPTIMIZE_INTERVAL_MS   = intEnv('WORKER_OPTIMIZE_INTERVAL_MS',   6 * 60 * 60 * 1000);
 const HEALTH_INTERVAL_MS     = intEnv('WORKER_HEALTH_INTERVAL_MS',     60 * 1000);
+const LOG_PRUNE_INTERVAL_MS  = intEnv('WORKER_LOG_PRUNE_INTERVAL_MS',  6 * 60 * 60 * 1000);
 const SHUTDOWN_TIMEOUT_MS    = intEnv('WORKER_SHUTDOWN_TIMEOUT_MS',    15 * 1000);
 
 const DATA_DIR  = process.env.DB_DIR || path.resolve(__dirname, 'data');
@@ -60,6 +61,7 @@ async function bootstrap() {
     if (isStatsEnabled()) {
         const SIX_HOURS_MS = 6 * 60 * 60 * 1000; // Cleanup inactive users daily (runs every 6 hours, deletes >30-day inactive)
         schedule('user-cleanup', SIX_HOURS_MS, runUserCleanup);
+        schedule('log-prune', LOG_PRUNE_INTERVAL_MS, runLogPrune);
     }
 
     log('info',
@@ -138,6 +140,14 @@ async function runUserCleanup() {
         await statsDB.cleanupInactiveUsers();
     } catch (err) {
         log('warn', `[worker] user cleanup failed: ${err.message}`);
+    }
+}
+
+async function runLogPrune() {
+    try {
+        await statsDB.pruneLogs();
+    } catch (err) {
+        log('warn', `[worker] log prune failed: ${err.message}`);
     }
 }
 

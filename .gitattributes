@@ -1,0 +1,3 @@
+# Container entrypoints must keep LF. With core.autocrlf=true a fresh clone
+# otherwise checks them out as CRLF and the container dies on startup.
+*.sh text eol=lf
