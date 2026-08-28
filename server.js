@@ -7,6 +7,8 @@ require('dotenv').config();
  */
 
 const path = require('path');
+const cluster = require('cluster');
+const os = require('os');
 const express = require('express');
 
 const { log } = require('./src/utils');
@@ -27,6 +29,16 @@ const PORT = parseInt(process.env.PORT, 10) || 3100;
 const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS, 10) || 10000;
+
+function resolveConcurrency() {
+    const raw = (process.env.WEB_CONCURRENCY || '').trim();
+    if (raw === 'auto') return Math.max(1, os.cpus().length - 1);
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+const WEB_CONCURRENCY = resolveConcurrency();
+const REFORK_DELAY_MS = parseInt(process.env.REFORK_DELAY_MS, 10) || 1000;
 
 async function bootstrap() {
     const app = express();
@@ -86,7 +98,8 @@ async function bootstrap() {
     await Promise.allSettled(initTasks);
 
     const server = app.listen(PORT, HOST, () => {
-        log('info', `[server] listening on http://${HOST}:${PORT}`);
+        const tag = cluster.isWorker ? `worker ${process.pid}` : 'server';
+        log('info', `[${tag}] listening on http://${HOST}:${PORT}`);
         log('info', `[server] static dir: ${PUBLIC_DIR}`);
     });
 
@@ -143,11 +156,61 @@ function installShutdownHandlers(server) {
     });
 }
 
-if (require.main === module) {
-    bootstrap().catch((err) => {
-        log('error', `[server] bootstrap failed: ${err.stack || err.message}`);
-        process.exit(1);
+/**
+ * Cluster primary. Forks the request workers, replaces any that die, and relays signals.
+ * It opens no databases and serves no traffic itself.
+ */
+function runPrimary() {
+    log('info', `[primary] starting ${WEB_CONCURRENCY} workers on pid ${process.pid}`);
+    for (let i = 0; i < WEB_CONCURRENCY; i++) cluster.fork();
+
+    let shuttingDown = false;
+
+    cluster.on('exit', (worker, code, signal) => {
+        if (shuttingDown) return;
+        log('warn', `[primary] worker ${worker.process.pid} exited (${signal || 'code ' + code}), replacing in ${REFORK_DELAY_MS}ms`);
+        setTimeout(() => { if (!shuttingDown) cluster.fork(); }, REFORK_DELAY_MS).unref();
     });
+
+    cluster.on('online', (worker) => log('debug', `[primary] worker ${worker.process.pid} online`));
+
+    const relay = (signal) => () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        log('info', `[primary] ${signal} received; stopping ${Object.keys(cluster.workers).length} workers`);
+        for (const worker of Object.values(cluster.workers)) {
+            try { worker.process.kill(signal); } catch (_) { /* already gone */ }
+        }
+        const force = setTimeout(() => {
+            log('warn', '[primary] force-exit after shutdown timeout');
+            process.exit(1);
+        }, SHUTDOWN_TIMEOUT_MS + 2000);
+        force.unref();
+
+        const check = setInterval(() => {
+            if (Object.keys(cluster.workers).length === 0) {
+                clearInterval(check);
+                clearTimeout(force);
+                log('info', '[primary] all workers stopped');
+                process.exit(0);
+            }
+        }, 200);
+        check.unref();
+    };
+
+    process.on('SIGTERM', relay('SIGTERM'));
+    process.on('SIGINT', relay('SIGINT'));
 }
 
-module.exports = { bootstrap };
+if (require.main === module) {
+    if (cluster.isPrimary && WEB_CONCURRENCY > 1) {
+        runPrimary();
+    } else {
+        bootstrap().catch((err) => {
+            log('error', `[server] bootstrap failed: ${err.stack || err.message}`);
+            process.exit(1);
+        });
+    }
+}
+
+module.exports = { bootstrap, runPrimary, WEB_CONCURRENCY };

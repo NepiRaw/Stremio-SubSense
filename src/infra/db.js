@@ -158,10 +158,11 @@ CREATE TABLE IF NOT EXISTS at_torrent_details (
 
 const SCHEMAS = { cache: CACHE_SCHEMA, stats: STATS_SCHEMA, meta: META_SCHEMA };
 
+const BUSY_TIMEOUT_MS = 5000;
+
 // foreign_keys is left at the libSQL default (on) so a future FK would actually enforce.
 const RUNTIME_PRAGMAS = [
     'PRAGMA synchronous = NORMAL',
-    'PRAGMA busy_timeout = 5000',
     'PRAGMA temp_store = MEMORY',
     'PRAGMA cache_size = -16384'
 ];
@@ -189,7 +190,14 @@ function readPragma(result) {
 }
 
 async function applyPragmas(name, client) {
-    // Order is load-bearing: auto_vacuum is only accepted on an empty, non-WAL database.
+    // busy_timeout first: without it the statements below fail instantly when several
+    // processes open the same file at once, which is what cluster startup does.
+    try {
+        await client.execute(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    } catch (err) {
+        log('warn', `[DB:${name}] busy_timeout could not be set: ${err.message}`);
+    }
+    // auto_vacuum is only accepted on an empty database and before WAL.
     try {
         await client.execute('PRAGMA auto_vacuum = INCREMENTAL');
     } catch (err) {
@@ -226,6 +234,24 @@ async function verifyPragmas(name) {
     };
 }
 
+/**
+ * Retry a schema statement that lost a startup race. WAL upgrades and DDL still take brief
+ * exclusive locks that busy_timeout alone does not always cover across processes.
+ */
+async function withRetry(name, fn, attempts = 5) {
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await fn();
+        } catch (err) {
+            const busy = /SQLITE_BUSY|database is locked/i.test(err.message || '');
+            if (!busy || i === attempts - 1) throw err;
+            const backoff = 100 * (i + 1);
+            log('debug', `[DB:${name}] busy during init, retrying in ${backoff}ms`);
+            await new Promise(r => setTimeout(r, backoff));
+        }
+    }
+}
+
 /** Rotating tables that wrongly declare a foreign key. */
 async function rotationTablesWithForeignKeys() {
     const offenders = [];
@@ -246,7 +272,7 @@ async function initAll() {
     initPromise = (async () => {
         for (const name of Object.keys(clients)) {
             await applyPragmas(name, clients[name]);
-            await clients[name].executeMultiple(SCHEMAS[name]);
+            await withRetry(name, () => clients[name].executeMultiple(SCHEMAS[name]));
 
             const p = await verifyPragmas(name);
             if (p.journal_mode !== 'wal') {

@@ -1,6 +1,7 @@
 'use strict';
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
+const rateLimit = require('../infra/rate-limit');
 const { log } = require('../utils');
 const { toAlpha2, toAlpha3B, getDisplayName, getByAnyCode } = require('../languages');
 
@@ -180,11 +181,7 @@ class OpenSubtitlesProvider extends BaseProvider {
      * Throttle to avoid hammering the API
      */
     async _throttle() {
-        const now = Date.now();
-        const elapsed = now - this._lastRequestAt;
-        if (elapsed < REQUEST_DELAY_MS) {
-            await new Promise(r => setTimeout(r, REQUEST_DELAY_MS - elapsed));
-        }
+        await rateLimit.throttle('opensubtitles', REQUEST_DELAY_MS);
         this._lastRequestAt = Date.now();
     }
 }
