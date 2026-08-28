@@ -9,7 +9,7 @@ const inflight = require('../cache/inflight');
 const metrics = require('../infra/metrics');
 const { prioritizeByLanguage, formatForStremio } = require('../utils/format');
 const { validateWyzieUrls } = require('../utils/validateWyzie');
-const { statsService } = require('../stats');
+const { statsService, track } = require('../stats');
 
 let encryptConfig = null;
 try {
@@ -144,6 +144,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
 
         l1.set(cacheKey, validated).catch(() => {});
         l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated)
+            .then((delta) => { if (delta) track.dist(delta); })
             .catch((err) => log('debug', `[handler] L2 write failed: ${err.message}`));
 
         if (Array.isArray(result.backgroundPromises) && result.backgroundPromises.length > 0) {
@@ -203,7 +204,8 @@ function wireBackgroundPromises(promises, parsed, languages, parsedConfig, cache
 
         const validated = await validateWyzieUrls(merged);
         await l1.set(cacheKey, validated);
-        l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated).catch(() => {});
+        l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated)
+            .then((delta) => { if (delta) track.dist(delta); }).catch(() => {});
         log('info', `[handler] bg-warm ${reqTag(parsed, uniqueLangs(validated))} -> ${validated.length} subs (+${added})`);
     }).catch((err) => log('debug', `[handler] bg error: ${err.message}`));
 }
@@ -246,7 +248,8 @@ function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filena
 
             const validated = await validateWyzieUrls(formatted);
             await l1.set(cacheKey, validated);
-            l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated).catch(() => {});
+            l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated)
+                .then((delta) => { if (delta) track.dist(delta); }).catch(() => {});
             log('info', `[handler] stale-refresh ${reqTag(parsed, wyzieLanguages)} -> ${validated.length} subs`);
         } catch (err) {
             log('debug', `[handler] stale-refresh failed: ${err.message}`);

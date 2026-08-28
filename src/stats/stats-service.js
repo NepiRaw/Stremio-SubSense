@@ -10,6 +10,16 @@
  */
 
 const { log } = require('../../src/utils');
+const track = require('./track');
+
+let _toAlpha3B = null;
+function toAlpha3B(code) {
+    if (!_toAlpha3B) {
+        try { _toAlpha3B = require('../../src/languages').toAlpha3B; }
+        catch (_) { _toAlpha3B = (c) => c; }
+    }
+    return _toAlpha3B(code);
+}
 
 const HISTORY_LIMIT = 100;
 
@@ -23,12 +33,10 @@ const stats = {
 
 let _statsDB = null;
 let _getMode = () => 'disabled';
-let _queueWrite = null;
 
-function init(statsDB, getMode, queueWrite) {
+function init(statsDB, getMode) {
     _statsDB = statsDB;
-    _getMode = getMode;
-    _queueWrite = queueWrite || null;
+    _getMode = getMode || (() => 'full');
 }
 
 function getDateKey() {
@@ -54,8 +62,7 @@ function getDateKey() {
  * @param {boolean} data.cacheHit      - whether this was a cache hit
  */
 function trackRequest(data) {
-    const mode = _getMode();
-    if (mode === 'disabled') return;
+    if (_getMode() === 'disabled') return;
 
     const {
         type, fetchTimeMs, subtitleCount = 0, subtitles = [],
@@ -63,33 +70,10 @@ function trackRequest(data) {
         season, episode, cacheHit
     } = data;
 
-    // ---- Minimal mode: only track user session, skip everything else ----
-    if (mode === 'minimal') {
-        if (_statsDB && userId) {
-            const writeFn = () => _statsDB.trackUserRequest(userId, {
-                imdbId, contentType: type, languages, season, episode
-            });
-            _queueWrite ? _queueWrite(writeFn) : writeFn().catch(err =>
-                log('debug', `[stats] minimal user track error: ${err.message}`));
-        }
-        return;
-    }
-
-    // ---- Full mode: track everything ----
-
-    const dateKey = getDateKey();
-
-    // In-memory counters
+    // In-memory figures back the per-process timing sparkline.
     stats.requests.total++;
     if (type === 'movie') stats.requests.movie++;
     if (type === 'series') stats.requests.series++;
-
-    if (!stats.requests.byDate[dateKey]) {
-        stats.requests.byDate[dateKey] = { total: 0, movie: 0, series: 0 };
-    }
-    stats.requests.byDate[dateKey].total++;
-    if (type) stats.requests.byDate[dateKey][type]++;
-
     stats.subtitles.total += subtitleCount;
 
     for (const sub of subtitles) {
@@ -99,23 +83,6 @@ function trackRequest(data) {
         stats.subtitles.byLanguage[lang] = (stats.subtitles.byLanguage[lang] || 0) + 1;
     }
 
-    // Language matching
-    if (languageMatch) {
-        if (languageMatch.languages && Array.isArray(languageMatch.languages)) {
-            for (const lang of languageMatch.languages) {
-                stats.languageMatching.totalRequests++;
-                if (languageMatch.found && languageMatch.found.includes(lang)) {
-                    stats.languageMatching.found++;
-                    stats.languageMatching.byLanguageSuccess[lang] =
-                        (stats.languageMatching.byLanguageSuccess[lang] || 0) + 1;
-                } else {
-                    stats.languageMatching.notFound++;
-                }
-            }
-        }
-    }
-
-    // Timing
     if (fetchTimeMs !== undefined) {
         stats.timing.totalMs += fetchTimeMs;
         stats.timing.count++;
@@ -123,48 +90,51 @@ function trackRequest(data) {
         stats.timing.maxMs = Math.max(stats.timing.maxMs, fetchTimeMs);
         stats.timing.history.push(fetchTimeMs);
         if (stats.timing.history.length > HISTORY_LIMIT) stats.timing.history.shift();
+        track.responseTime(fetchTimeMs);
     }
 
-    // Persistent writes (batched via queueWrite or fire-and-forget)
-    if (_statsDB) {
-        const enqueue = (fn) => {
-            if (_queueWrite) _queueWrite(fn);
-            else fn().catch(err => log('debug', `[stats] write error: ${err.message}`));
-        };
+    const isMovie = type === 'movie' ? 1 : 0;
+    const isSeries = type === 'series' ? 1 : 0;
 
-        enqueue(() => _statsDB.increment('total_requests'));
-        if (type === 'movie') enqueue(() => _statsDB.increment('total_movies'));
-        if (type === 'series') enqueue(() => _statsDB.increment('total_series'));
-        enqueue(() => _statsDB.increment('total_subtitles', subtitleCount));
-        enqueue(() => cacheHit ? _statsDB.increment('cache_hits') : _statsDB.increment('cache_misses'));
-        enqueue(() => _statsDB.recordDaily({
-            requests: 1, cacheHits: cacheHit ? 1 : 0,
-            cacheMisses: cacheHit ? 0 : 1, conversions: 0,
-            movies: type === 'movie' ? 1 : 0,
-            series: type === 'series' ? 1 : 0
-        }));
-        enqueue(() => _statsDB.logRequest({
-            imdbId, contentType: type, languages,
-            resultCount: subtitleCount, cacheHit,
-            responseTimeMs: fetchTimeMs || 0,
-            anyPreferredFound: languageMatch?.anyPreferredFound || false,
-            allPreferredFound: languageMatch?.allPreferredFound || false
-        }));
-        if (userId) {
-            enqueue(() => _statsDB.trackUserRequest(userId, {
-                imdbId, contentType: type, languages, season, episode
-            }));
-        }
+    track.counter('total_requests');
+    if (isMovie) track.counter('total_movies');
+    if (isSeries) track.counter('total_series');
+    track.counter('total_subtitles', subtitleCount);
+    track.counter(cacheHit ? 'cache_hits' : 'cache_misses');
 
-        // Per-language stats
-        if (languageMatch && languageMatch.languages) {
-            for (const lang of languageMatch.languages) {
-                enqueue(() => _statsDB.recordLanguageStats({
-                    languageCode: lang,
-                    found: languageMatch.found && languageMatch.found.includes(lang)
-                }));
+    track.daily({
+        requests: 1,
+        cache_hits: cacheHit ? 1 : 0,
+        cache_misses: cacheHit ? 0 : 1,
+        movies: isMovie,
+        series: isSeries,
+        subtitles: subtitleCount,
+        any_pref_found: languageMatch && languageMatch.anyPreferredFound ? 1 : 0,
+        all_pref_found: languageMatch && languageMatch.allPreferredFound ? 1 : 0
+    });
+
+    if (languages.length > 0) {
+        track.combo(languages.map(l => (toAlpha3B(l) || l).toLowerCase()));
+    }
+
+    if (languageMatch && Array.isArray(languageMatch.languages)) {
+        for (const lang of languageMatch.languages) {
+            const found = Array.isArray(languageMatch.found) && languageMatch.found.includes(lang);
+            track.language(lang, { found });
+            stats.languageMatching.totalRequests++;
+            if (found) {
+                stats.languageMatching.found++;
+                stats.languageMatching.byLanguageSuccess[lang] =
+                    (stats.languageMatching.byLanguageSuccess[lang] || 0) + 1;
+            } else {
+                stats.languageMatching.notFound++;
             }
         }
+    }
+
+    if (userId) {
+        track.user(userId, { movie: isMovie, series: isSeries, languages });
+        if (imdbId) track.content({ userId, imdbId, contentType: type, season, episode });
     }
 }
 

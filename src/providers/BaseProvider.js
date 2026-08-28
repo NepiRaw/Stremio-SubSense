@@ -81,24 +81,19 @@ class BaseProvider {
 
     _recordToDatabase(success, responseMs, subtitlesCount) {
         try {
-            if (!this._statsDB) {
-                try {
-                    const { statsDB, isFullStats, queueWrite } = require('../stats');
-                    if (!isFullStats()) return;
-                    this._statsDB = statsDB;
-                    this._queueWrite = queueWrite;
-                } catch (_) { return; }
+            if (!this._track) {
+                const { track, isStatsEnabled } = require('../stats');
+                if (!isStatsEnabled()) return;
+                this._track = track;
             }
-            if (this._statsDB && this._statsDB.recordProviderStats) {
-                const fn = () => this._statsDB.recordProviderStats({
-                    providerName: this.name,
-                    success,
-                    responseMs: responseMs || 0,
-                    subtitlesCount: subtitlesCount || 0
-                });
-                if (this._queueWrite) this._queueWrite(fn);
-                else fn().catch(() => {});
-            }
+            this._track.provider(this.name, {
+                requests: 1,
+                ok: success ? 1 : 0,
+                failed: success ? 0 : 1,
+                subtitles: subtitlesCount || 0,
+                ms: responseMs || 0,
+                withResults: (subtitlesCount || 0) > 0 ? 1 : 0
+            });
         } catch (_) { /* never fail the request path */ }
     }
 }

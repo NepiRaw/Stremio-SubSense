@@ -91,10 +91,40 @@ async function getByContent(imdbId, season, episode, languages) {
     }
 }
 
+function countsOf(subtitles, sign) {
+    const out = Object.create(null);
+    for (const s of subtitles || []) {
+        if (s.source) out[`source:${s.source}`] = (out[`source:${s.source}`] || 0) + sign;
+        if (s.lang) out[`lang:${s.lang}`] = (out[`lang:${s.lang}`] || 0) + sign;
+    }
+    return out;
+}
+
+/**
+ * Upsert an entry and return the net change in cache composition, so counters stay exact
+ * when a row replaces an older one.
+ */
 async function set(imdbId, season, episode, languages, subtitles) {
-    if (!Array.isArray(subtitles) || subtitles.length === 0) return false;
+    if (!Array.isArray(subtitles) || subtitles.length === 0) return null;
     const langKey = buildLangKey(languages);
+    let delta = countsOf(subtitles, 1);
     try {
+        const prev = await cacheDb.execute({
+            sql: 'SELECT subtitles FROM subtitle_cache WHERE imdb_id = ? AND season = ? AND episode = ? AND lang_key = ?',
+            args: [imdbId, season || 0, episode || 0, langKey]
+        });
+        if (prev.rows.length > 0) {
+            try {
+                const old = JSON.parse(prev.rows[0].subtitles);
+                if (Array.isArray(old)) {
+                    for (const [k, v] of Object.entries(countsOf(old, -1))) {
+                        delta[k] = (delta[k] || 0) + v;
+                        if (delta[k] === 0) delete delta[k];
+                    }
+                }
+            } catch (_) { /* an unreadable old blob just leaves the delta positive */ }
+        }
+
         await cacheDb.execute({
             sql: `INSERT INTO subtitle_cache (imdb_id, season, episode, lang_key, subtitles, created_at, updated_at)
                   VALUES (?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
@@ -103,10 +133,10 @@ async function set(imdbId, season, episode, languages, subtitles) {
                       updated_at = strftime('%s','now')`,
             args: [imdbId, season || 0, episode || 0, langKey, JSON.stringify(subtitles)]
         });
-        return true;
+        return delta;
     } catch (err) {
         log('error', `[L2] set failed: ${err.message}`);
-        return false;
+        return null;
     }
 }
 
@@ -158,7 +188,7 @@ async function count() {
 }
 
 module.exports = {
-    buildLangKey, get, getByContent, set,
+    buildLangKey, get, getByContent, set, countsOf,
     deleteExpiredBatch, selectExpiredBatch, deleteByRowIds,
     countExpired, count, TTL_SECONDS
 };

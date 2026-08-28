@@ -21,7 +21,7 @@ const routes = require('./src/routes');
 const db = require('./src/cache/database-libsql');
 const infra = require('./src/infra/db');
 const redis = require('./src/infra/redis');
-const { initStats, getStatsMode, isFullStats, statsDB } = require('./src/stats');
+const { initStats, getStatsMode, flushWrites } = require('./src/stats');
 
 const PORT = parseInt(process.env.PORT, 10) || 3100;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -59,11 +59,6 @@ async function bootstrap() {
     await initStats();
     log('info', `[server] stats mode: ${getStatsMode()}`);
 
-    if (isFullStats() && statsDB) {
-        statsDB.recomputeSummary({ force: true }).catch(err =>
-            log('warn', `[server] startup stats recompute failed: ${err.message}`)
-        );
-    }
     registerDefaultProviders();
 
     const { providerManager } = require('./src/providers');
@@ -126,6 +121,7 @@ function installShutdownHandlers(server) {
         server.close(async (err) => {
             if (err) log('warn', `[server] close error: ${err.message}`);
             try {
+                await flushWrites();
                 await redis.close();
                 infra.close();
                 db.close();
