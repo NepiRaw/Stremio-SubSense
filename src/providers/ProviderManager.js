@@ -2,6 +2,7 @@
 
 const { log } = require('../../src/utils');
 const InflightCache = require('../cache/InflightCache');
+const metrics = require('../infra/metrics');
 
 const DEFAULT_DEADLINE_MS = parseInt(process.env.PROVIDER_DEADLINE_MS, 10) || 8000;
 
@@ -109,6 +110,7 @@ class ProviderManager {
      * can warm the cache when they eventually arrive.
      */
     _raceWithDeadline(provider, query, deadlineMs) {
+        const startedAt = Date.now();
         return new Promise((resolve) => {
             let settled = false;
             let timer = null;
@@ -138,6 +140,7 @@ class ProviderManager {
                 settled = true;
                 clearTimeout(timer);
                 const subs = (res && res.subtitles) || [];
+                metrics.recordProvider(provider.name, Date.now() - startedAt, subs.length);
                 resolve({
                     subtitles: subs,
                     backgroundPromise: (res && res.backgroundPromise) || null,

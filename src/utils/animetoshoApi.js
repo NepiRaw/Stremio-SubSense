@@ -18,6 +18,7 @@
  */
 
 const { log } = require('../utils');
+const rateLimit = require('../infra/rate-limit');
 
 const FEED_URL = 'https://feed.animetosho.org/json';
 const STORAGE_URL = 'https://storage.animetosho.org/attach';
@@ -39,12 +40,9 @@ let currentInterval = BASE_RATE_MS;
 let consecutiveFailures = 0;
 
 function enqueueRequest(fn) {
+    // Slots are reserved across every worker, so the interval is the addon's rate, not one process's.
     const gate = gatePromise.then(async () => {
-        const now = Date.now();
-        const elapsed = now - lastRequestTime;
-        if (elapsed < currentInterval) {
-            await new Promise(r => setTimeout(r, currentInterval - elapsed));
-        }
+        await rateLimit.throttle('animetosho', currentInterval);
         lastRequestTime = Date.now();
     });
     gatePromise = gate.catch(() => {});

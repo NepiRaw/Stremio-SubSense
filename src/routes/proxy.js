@@ -42,16 +42,32 @@ try { decryptConfig = require('../../src/utils/crypto').decryptConfig; }
 catch (_) { log('warn', '[proxy] crypto unavailable; SubSource downloads will be limited'); }
 
 const PROXY_CACHE_MAX = parseInt(process.env.PROXY_CACHE_MAX, 10) || 5000;
+const PROXY_CACHE_MAX_BYTES = parseInt(process.env.PROXY_CACHE_MAX_BYTES, 10) || 256 * 1024 * 1024;
 const PROXY_CACHE_TTL_MS = (parseInt(process.env.PROXY_CACHE_TTL_HOURS, 10) || 24) * 60 * 60 * 1000;
 
-const proxyCache = new Map(); // key -> { content, contentType, headers, storedAt }
+const proxyCache = new Map(); // key -> { content, contentType, headers, storedAt, bytes }
 const inflight = new Map();   // key -> Promise<entry>
+let cacheBytes = 0;
+
+/** Subtitle bodies vary by orders of magnitude, so the cache is capped by size, not count. */
+function entryBytes(entry) {
+    const c = entry && entry.content;
+    if (!c) return 0;
+    return Buffer.isBuffer(c) ? c.length : Buffer.byteLength(String(c));
+}
+
+function cacheDelete(key) {
+    const e = proxyCache.get(key);
+    if (!e) return;
+    cacheBytes -= e.bytes || 0;
+    proxyCache.delete(key);
+}
 
 function cacheGet(key) {
     const e = proxyCache.get(key);
     if (!e) return null;
     if (Date.now() - e.storedAt > PROXY_CACHE_TTL_MS) {
-        proxyCache.delete(key);
+        cacheDelete(key);
         return null;
     }
     proxyCache.delete(key);
@@ -60,12 +76,17 @@ function cacheGet(key) {
 }
 
 function cacheSet(key, entry) {
-    while (proxyCache.size >= PROXY_CACHE_MAX) {
+    const bytes = entryBytes(entry);
+    if (bytes > PROXY_CACHE_MAX_BYTES) return;
+
+    cacheDelete(key);
+    while (proxyCache.size > 0 && (proxyCache.size >= PROXY_CACHE_MAX || cacheBytes + bytes > PROXY_CACHE_MAX_BYTES)) {
         const oldest = proxyCache.keys().next().value;
         if (oldest === undefined) break;
-        proxyCache.delete(oldest);
+        cacheDelete(oldest);
     }
-    proxyCache.set(key, { ...entry, storedAt: Date.now() });
+    proxyCache.set(key, { ...entry, storedAt: Date.now(), bytes });
+    cacheBytes += bytes;
 }
 
 function dedupe(key, fn) {
@@ -442,6 +463,8 @@ function getProxyCacheStats() {
     return {
         size: proxyCache.size,
         maxEntries: PROXY_CACHE_MAX,
+        bytes: cacheBytes,
+        maxBytes: PROXY_CACHE_MAX_BYTES,
         ttlMs: PROXY_CACHE_TTL_MS,
         inflight: inflight.size
     };
@@ -734,4 +757,5 @@ async function fetchGestdown(subtitleId, fmt = 'vtt') {
 }
 
 module.exports = router;
+module.exports._cache = { cacheGet, cacheSet, getProxyCacheStats, PROXY_CACHE_MAX_BYTES };
 module.exports.getProxyCacheStats = getProxyCacheStats;

@@ -1,8 +1,19 @@
+# SubSense reference stack: API + maintenance worker + Redis.
+#
+# The worker is the only process that writes to the databases on a schedule, and Redis holds the
+# hot cache. If Redis goes down the addon keeps serving from SQLite, without analytics.
+#
+# Upgrading from v2.3.x? Run scripts/migrate-db.js once, with everything stopped, BEFORE starting
+# this stack. See the Upgrading section in README.md.
+
 services:
   subsense:
     image: nepiraw/stremio-subsense:latest
     container_name: stremio-subsense
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     ports:
       - "3100:3100"
     env_file:
@@ -10,11 +21,16 @@ services:
     environment:
       # --- Core (mandatory) ---
       - PORT=3100                              # Server port
+      - HOST=0.0.0.0                           # Bind inside the container
       - SUBSENSE_ENCRYPTION_KEY=               # REQUIRED
 
       # --- Core (optional) ---
       # - SUBSENSE_BASE_URL=                   # Public URL for proxy links (auto-detected if not set)
       - LOG_LEVEL=info                         # debug | info | warn | error
+
+      # --- Cluster ---
+      - WEB_CONCURRENCY=3                      # Request workers. "auto" uses cores minus one
+      - NODE_OPTIONS=--max-old-space-size=768  # Per worker process, NOT for the group
 
       # --- WARP proxy ---
       - WARP_ENABLED=true
@@ -24,19 +40,24 @@ services:
       # - SUBTITLE_SOURCES=wyzie,betaseries,yify,tvsubtitles,subsource
 
       # --- Provider API keys ---
-      # - WYZIE_API_KEY=                       # REQUIRED for wyzie provider (get at https://sub.wyzie.io/redeem)
-      # - WYZIE_SOURCES=                       # Optional - override wyzie sub-sources (comma-separated)
-      # - BETASERIES_API_KEY=                  # Optional - enables BetaSeries provider (French/English)
+      # - WYZIE_API_KEYS=                      # REQUIRED for wyzie provider (comma-separated)
+      # - WYZIE_SOURCES=                       # Optional - override wyzie sub-sources
+      # - BETASERIES_API_KEY=                  # Optional - enables BetaSeries (French/English)
 
-      # --- Database / Cache (optional) ---
-      - DB_PATH=/app/data/subsense.db          # SQLite database path inside container
-      # - ENABLE_CACHE=true                    # Enable/disable subtitle caching
-      # - CACHE_RETENTION_DAYS=30              # Days before expired cache entries are cleaned up
-      # - CACHE_REFRESH_INTERVAL=604800        # Seconds before background refresh of stale entries
+      # --- Storage: three files, separate lock domains ---
+      - CACHE_DB_PATH=/app/data/subsense-cache.db
+      - STATS_DB_PATH=/app/data/subsense-stats.db
+      - META_DB_PATH=/app/data/subsense-meta.db
+      # - L2_TTL_DAYS=7                        # Subtitle cache retention
 
-      # --- Stats (optional, default: minimal) ---
-      # - STATS_REFRESH_INTERVAL=minimal       # "minimal" (default) | "0" (disabled) | <ms> (full mode)
-    
+      # --- Redis ---
+      - REDIS_URL=redis://subsense-redis:6379
+      # - L1_TTL_HOURS=6                       # Response cache TTL
+      # - L1_STALE_AFTER_HOURS=2               # Served but refreshed in the background past this age
+
+      # --- Stats (optional) ---
+      # - STATS_ENABLED=false                  # Switches off all recording, including /configure counts
+
     # --- WARP requirements ---
     cap_add:
        - NET_ADMIN
@@ -46,28 +67,58 @@ services:
        - net.ipv6.conf.all.disable_ipv6=0
        - net.ipv4.conf.all.src_valid_mark=1
     volumes:
-      - ./data:/app/data
+      - subsense-data:/app/data
       - warp-data:/var/lib/cloudflare-warp
 
   worker:
     image: nepiraw/stremio-subsense:latest
     container_name: stremio-subsense-worker
     restart: unless-stopped
+    init: true                                 # so SIGTERM reaches node and the final drain runs
     command: ["node", "worker.js"]
     healthcheck:
-      disable: true
+      disable: true                            # no HTTP listener; /health/deep reports on it
+    depends_on:
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     environment:
-      - DB_PATH=/app/data/subsense.db
       - LOG_LEVEL=info
-      # - STATS_REFRESH_INTERVAL=minimal
+      - WARP_ENABLED=false                     # the worker makes no upstream provider calls
+      - NODE_OPTIONS=--max-old-space-size=512
+      - CACHE_DB_PATH=/app/data/subsense-cache.db
+      - STATS_DB_PATH=/app/data/subsense-stats.db
+      - META_DB_PATH=/app/data/subsense-meta.db
+      - REDIS_URL=redis://subsense-redis:6379
       # - WORKER_CLEANUP_INTERVAL_MS=7200000
       # - WORKER_CHECKPOINT_INTERVAL_MS=1800000
-      # - WORKER_OPTIMIZE_INTERVAL_MS=21600000
+      # - WORKER_FOLD_INTERVAL_MS=60000
       # - WORKER_HEALTH_INTERVAL_MS=60000
     volumes:
-      - ./data:/app/data
+      - subsense-data:/app/data                # same volume as the API
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: subsense-redis
+    restart: unless-stopped
+    # volatile-lru is deliberate: TTL-bearing cache keys are evictable, while the analytics
+    # counter hash and the content-log queue carry no TTL and survive memory pressure.
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy volatile-lru
+      --save 300 100
+      --appendonly no
+    volumes:
+      - subsense-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
+  subsense-data:
+  subsense-redis:
   warp-data:

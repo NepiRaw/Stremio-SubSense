@@ -94,8 +94,6 @@ dist
 # Testing
 tests/
 test/
-scripts/
-script/
 test-*
 debug-*
 TODELETE-*

@@ -12,7 +12,7 @@ const path = require('path');
 const { log } = require('../../src/utils');
 const {
     statsDB, statsService,
-    isFullStats, isMinimalStats, isStatsEnabled,
+    isFullStats, isStatsEnabled,
     getCachedStats
 } = require('../stats');
 

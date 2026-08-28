@@ -3,7 +3,7 @@
 const express = require('express');
 const { log } = require('../../src/utils');
 const { providerManager } = require('../providers');
-const { isFullStats, isMinimalStats, isStatsEnabled, statsDB } = require('../stats');
+const { isFullStats, isStatsEnabled, statsDB } = require('../stats');
 
 let encryptConfig = null;
 let isEncryptionConfigured = () => false;

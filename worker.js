@@ -3,175 +3,68 @@
 require('dotenv').config();
 
 /**
- * SubSense worker process.
+ * SubSense maintenance worker.
  *
- * The worker owns every background job that touches the cache database:
- *
- *   - cache cleanup (TTL-based DELETE in 500-row batches, every 2h)
- *   - WAL checkpoint (PASSIVE every 30min, TRUNCATE on shutdown)
- *   - PRAGMA optimize + incremental_vacuum (every 6h)
- *   - health snapshot (data/admin/dashboard.json every 60s)
- *
- * On SIGTERM/SIGINT it runs every interval one final time, performs a
- * TRUNCATE checkpoint, and closes the DB cleanly so the WAL is reclaimed.
+ * The only process that writes to stats.db on a schedule. Every job runs under a time
+ * budget and reports what it left behind, so a backlog is drained across ticks rather
+ * than in one unbounded pass.
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const { log } = require('./src/utils');
-const db = require('./src/cache/database-libsql');
-const CacheCleaner = require('./src/cache/cache-cleaner');
-const { initStats, isFullStats, isStatsEnabled, statsDB, STATS_REFRESH_INTERVAL, flushWrites } = require('./src/stats');
-
-const CLEANUP_INTERVAL_MS    = intEnv('WORKER_CLEANUP_INTERVAL_MS',    2 * 60 * 60 * 1000);
-const CHECKPOINT_INTERVAL_MS = intEnv('WORKER_CHECKPOINT_INTERVAL_MS', 30 * 60 * 1000);
-const OPTIMIZE_INTERVAL_MS   = intEnv('WORKER_OPTIMIZE_INTERVAL_MS',   6 * 60 * 60 * 1000);
-const HEALTH_INTERVAL_MS     = intEnv('WORKER_HEALTH_INTERVAL_MS',     60 * 1000);
-const LOG_PRUNE_INTERVAL_MS  = intEnv('WORKER_LOG_PRUNE_INTERVAL_MS',  6 * 60 * 60 * 1000);
-const SHUTDOWN_TIMEOUT_MS    = intEnv('WORKER_SHUTDOWN_TIMEOUT_MS',    15 * 1000);
-
-const DATA_DIR  = process.env.DB_DIR || path.resolve(__dirname, 'data');
-const HEALTH_PATH = path.join(DATA_DIR, 'worker-health.json');
-
-const cleaner = new CacheCleaner();
-const intervals = [];
-let isShuttingDown = false;
+const infra = require('./src/infra/db');
+const redis = require('./src/infra/redis');
+const { createScheduler } = require('./src/jobs/scheduler');
+const { initStats, isStatsEnabled, statsDB, track, contentLog, fold } = require('./src/stats');
+const cacheCleanup = require('./src/jobs/cleanup-cache');
+const metaPrune = require('./src/jobs/prune-meta');
 
 function intEnv(name, fallback) {
     const v = parseInt(process.env[name], 10);
     return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
-async function bootstrap() {
-    log('info', '[worker] starting');
-    await db.initializeDatabase();
-    await initStats();
+const DRAIN_INTERVAL_MS      = intEnv('WORKER_DRAIN_INTERVAL_MS',      10 * 1000);
+const FOLD_INTERVAL_MS       = intEnv('WORKER_FOLD_INTERVAL_MS',       60 * 1000);
+const USERS_INTERVAL_MS      = intEnv('WORKER_USERS_INTERVAL_MS',      60 * 1000);
+const CLEANUP_INTERVAL_MS    = intEnv('WORKER_CLEANUP_INTERVAL_MS',    2 * 60 * 60 * 1000);
+const CHECKPOINT_INTERVAL_MS = intEnv('WORKER_CHECKPOINT_INTERVAL_MS', 30 * 60 * 1000);
+const HEALTH_INTERVAL_MS     = intEnv('WORKER_HEALTH_INTERVAL_MS',     60 * 1000);
+const PRUNE_USERS_INTERVAL_MS = intEnv('WORKER_PRUNE_USERS_INTERVAL_MS', 6 * 60 * 60 * 1000);
+const PRUNE_META_INTERVAL_MS  = intEnv('WORKER_PRUNE_META_INTERVAL_MS', 24 * 60 * 60 * 1000);
+const SHUTDOWN_TIMEOUT_MS    = intEnv('WORKER_SHUTDOWN_TIMEOUT_MS',    15 * 1000);
 
-    schedule('cleanup',    CLEANUP_INTERVAL_MS,    runCleanup);
-    schedule('checkpoint', CHECKPOINT_INTERVAL_MS, runCheckpoint);
-    schedule('optimize',   OPTIMIZE_INTERVAL_MS,   runOptimize);
-    schedule('health',     HEALTH_INTERVAL_MS,     writeHealthSnapshot);
+const DATA_DIR = process.env.DB_DIR || path.resolve(__dirname, 'data');
+const HEALTH_PATH = path.join(DATA_DIR, 'worker-health.json');
 
-    if (isFullStats() && STATS_REFRESH_INTERVAL > 0) {
-        await runStatsRecompute({ force: true }); // Force full recompute on startup
-        schedule('stats-recompute', STATS_REFRESH_INTERVAL, runStatsRecompute);
-    }
-
-    if (isStatsEnabled()) {
-        const SIX_HOURS_MS = 6 * 60 * 60 * 1000; // Cleanup inactive users daily (runs every 6 hours, deletes >30-day inactive)
-        schedule('user-cleanup', SIX_HOURS_MS, runUserCleanup);
-        schedule('log-prune', LOG_PRUNE_INTERVAL_MS, runLogPrune);
-    }
-
-    log('info',
-        `[worker] ready cleanup=${CLEANUP_INTERVAL_MS/60000}m checkpoint=${CHECKPOINT_INTERVAL_MS/60000}m optimize=${OPTIMIZE_INTERVAL_MS/60000}m health=${HEALTH_INTERVAL_MS/1000}s`);
-    installShutdownHandlers();
-}
-
-let staggerDelayMs = 0;
-const STAGGER_STEP_MS = 2000;
-
-function schedule(name, intervalMs, fn) {
-    const wrapped = async () => {
-        if (isShuttingDown) return;
-        const startedAt = Date.now();
-        try {
-            await fn();
-            log('debug', `[worker] ${name} ok in ${Date.now() - startedAt}ms`);
-        } catch (err) {
-            log('error', `[worker] ${name} failed: ${err.message}`);
-        }
-    };
-    const delay = staggerDelayMs;
-    staggerDelayMs += STAGGER_STEP_MS;
-    setTimeout(wrapped, delay);
-    const handle = setInterval(wrapped, intervalMs);
-    intervals.push({ name, handle });
-}
-
-async function runCleanup() {
-    const removed = await cleaner.run();
-    if (removed > 0) {
-        try { await db.execute('PRAGMA incremental_vacuum(1000)'); }
-        catch (err) { log('warn', `[worker] incremental_vacuum failed: ${err.message}`); }
-    }
-}
-
-async function runCheckpoint() {
-    await db.checkpoint();
-}
-
-async function runOptimize() {
-    try { await db.execute('PRAGMA optimize'); }
-    catch (err) { log('warn', `[worker] PRAGMA optimize failed: ${err.message}`); return; }
-
-    try {
-        const pageCountRow = (await db.execute('PRAGMA page_count')).rows[0];
-        const freeListRow  = (await db.execute('PRAGMA freelist_count')).rows[0];
-        const pages = readPragmaInt(pageCountRow);
-        const free  = readPragmaInt(freeListRow);
-        if (pages > 0 && free / pages > 0.25) {
-            log('info', `[worker] vacuum trigger: ${free}/${pages} free pages (${((free / pages) * 100).toFixed(0)}%)`);
-            await db.execute('PRAGMA incremental_vacuum(5000)');
-        }
-    } catch (err) {
-        log('warn', `[worker] vacuum check failed: ${err.message}`);
-    }
-}
-
-function readPragmaInt(row) {
-    if (!row) return 0;
-    const v = Array.isArray(row) ? row[0] : Object.values(row)[0];
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-}
-
-async function runStatsRecompute(opts) {
-    try {
-        await statsDB.recomputeSummary(opts);
-    } catch (err) {
-        log('warn', `[worker] stats recompute failed: ${err.message}`);
-    }
-}
-
-async function runUserCleanup() {
-    try {
-        await statsDB.cleanupInactiveUsers();
-    } catch (err) {
-        log('warn', `[worker] user cleanup failed: ${err.message}`);
-    }
-}
-
-async function runLogPrune() {
-    try {
-        await statsDB.pruneLogs();
-    } catch (err) {
-        log('warn', `[worker] log prune failed: ${err.message}`);
-    }
-}
+const scheduler = createScheduler();
+let isShuttingDown = false;
 
 async function writeHealthSnapshot() {
-    let subtitle = 0;
-    try {
-        const r = await db.execute('SELECT COUNT(*) AS c FROM subtitle_cache');
-        subtitle = readPragmaInt(r.rows[0]);
-    } catch (_) { /* table may not exist yet on first boot */ }
-
-    let dbSizeMB = null;
-    try {
-        const dbFile = path.join(DATA_DIR, 'subsense.db');
-        const stat = fs.statSync(dbFile);
-        dbSizeMB = +(stat.size / (1024 * 1024)).toFixed(2);
-    } catch (_) { /* fresh install */ }
-
     const snapshot = {
         generatedAt: new Date().toISOString(),
         pid: process.pid,
         uptimeSeconds: Math.round(process.uptime()),
-        subtitleCacheRows: subtitle,
-        dbSizeMB
+        redis: redis.isHealthy(),
+        jobs: scheduler.list()
     };
+    try {
+        snapshot.subtitleCacheRows = await cacheCleanup.cachedRowCount();
+        snapshot.contentLogRows = await contentLog.totalRows();
+    } catch (_) { /* tables may be empty on first boot */ }
+
+    try {
+        const stat = fs.statSync(path.join(DATA_DIR, path.basename(infra.PATHS.cache)));
+        snapshot.cacheDbMB = +(stat.size / (1024 * 1024)).toFixed(2);
+    } catch (_) { /* fresh install */ }
+
+    await redis.safe(r => r.hset('ss:health:worker', {
+        at: String(Date.now()),
+        pid: String(process.pid),
+        redis: '1'
+    }), null);
 
     try {
         fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -179,6 +72,49 @@ async function writeHealthSnapshot() {
     } catch (err) {
         log('warn', `[worker] health snapshot write failed: ${err.message}`);
     }
+
+    await infra.kvSet(infra.KV.workerHeartbeat, String(Date.now()));
+    return { done: true };
+}
+
+async function checkpoint() {
+    for (const [name, client] of [['stats', infra.statsDb], ['meta', infra.metaDb]]) {
+        try { await client.execute('PRAGMA wal_checkpoint(TRUNCATE)'); }
+        catch (err) { log('warn', `[worker] ${name} checkpoint failed: ${err.message}`); }
+    }
+    // The API writes cache.db continuously, so a passive checkpoint avoids blocking it.
+    try { await infra.cacheDb.execute('PRAGMA wal_checkpoint(PASSIVE)'); }
+    catch (err) { log('warn', `[worker] cache checkpoint failed: ${err.message}`); }
+    return { done: true };
+}
+
+async function pruneInactiveUsers() {
+    if (!isStatsEnabled()) return { done: true };
+    const removed = await statsDB.cleanupInactiveUsers();
+    return { done: true, removed };
+}
+
+async function bootstrap() {
+    log('info', '[worker] starting');
+    await infra.initAll();
+    await redis.connect();
+    await initStats();
+
+    let delay = 0;
+    const stagger = () => (delay += 2000);
+
+    scheduler.schedule({ name: 'drain-content-log', everyMs: DRAIN_INTERVAL_MS, budgetMs: 200, delayMs: stagger(), fn: contentLog.drain });
+    scheduler.schedule({ name: 'fold-analytics',    everyMs: FOLD_INTERVAL_MS,  budgetMs: 500, delayMs: stagger(), fn: fold.foldAll });
+    scheduler.schedule({ name: 'flush-users',       everyMs: USERS_INTERVAL_MS, budgetMs: 500, delayMs: stagger(), fn: fold.flushUsers });
+    scheduler.schedule({ name: 'cleanup-cache',     everyMs: CLEANUP_INTERVAL_MS, budgetMs: 2000, delayMs: stagger(), fn: cacheCleanup.run });
+    scheduler.schedule({ name: 'checkpoint',        everyMs: CHECKPOINT_INTERVAL_MS, delayMs: stagger(), fn: checkpoint });
+    scheduler.schedule({ name: 'prune-users',       everyMs: PRUNE_USERS_INTERVAL_MS, budgetMs: 500, delayMs: stagger(), fn: pruneInactiveUsers });
+    scheduler.schedule({ name: 'prune-meta',        everyMs: PRUNE_META_INTERVAL_MS, budgetMs: 1000, delayMs: stagger(), fn: metaPrune.run });
+    scheduler.schedule({ name: 'heartbeat',         everyMs: HEALTH_INTERVAL_MS, delayMs: 1000, fn: writeHealthSnapshot });
+
+    log('info', `[worker] ready with ${scheduler.list().length} jobs ` +
+        `(drain=${DRAIN_INTERVAL_MS / 1000}s fold=${FOLD_INTERVAL_MS / 1000}s cleanup=${CLEANUP_INTERVAL_MS / 60000}m)`);
+    installShutdownHandlers();
 }
 
 function installShutdownHandlers() {
@@ -200,30 +136,18 @@ async function shutdown(signal) {
     }, SHUTDOWN_TIMEOUT_MS);
     if (typeof force.unref === 'function') force.unref();
 
-    for (const { handle } of intervals) clearInterval(handle);
+    scheduler.stopAll();
 
-    try {
-        await flushWrites();
-    } catch (_) { /* best-effort */ }
-
-    try {
-        await runCleanup();
-    } catch (err) {
-        log('warn', `[worker] final cleanup failed: ${err.message}`);
+    // Drain what is already queued so a restart does not leave deltas stranded.
+    for (const [name, fn] of [['track', track.stop], ['drain', contentLog.drain], ['fold', fold.foldAll], ['users', fold.flushUsers]]) {
+        try { await fn({ deadline: Date.now() + 3000 }); }
+        catch (err) { log('warn', `[worker] final ${name} failed: ${err.message}`); }
     }
 
-    try {
-        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
-    } catch (err) {
-        log('warn', `[worker] final checkpoint failed: ${err.message}`);
-    }
-
-    try {
-        await writeHealthSnapshot();
-    } catch (_) { /* best-effort */ }
-
-    try { db.close(); }
-    catch (err) { log('warn', `[worker] db close error: ${err.message}`); }
+    try { await checkpoint(); } catch (_) { /* best effort */ }
+    try { await writeHealthSnapshot(); } catch (_) { /* best effort */ }
+    try { await redis.close(); } catch (_) { /* best effort */ }
+    try { infra.close(); } catch (err) { log('warn', `[worker] db close error: ${err.message}`); }
 
     clearTimeout(force);
     log('info', '[worker] shutdown complete');

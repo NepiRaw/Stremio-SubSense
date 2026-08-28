@@ -3,113 +3,31 @@
 /**
  * Stats module entry point.
  *
- * Single env var controls everything: STATS_REFRESH_INTERVAL
- *   - not set / empty        → minimal (default)
- *   - "0"                    → disabled (no tables, no tracking)
- *   - "minimal"              → minimal (user_tracking only, refreshed every 5min)
- *   - number > 0 (ms)        → full mode with that refresh interval
- *
- * Usage:
- *   const { statsDB, statsService, initStats, getStatsMode } = require('./stats');
- *   await initStats();
- *   statsService.trackRequest({ ... });
+ * There is one mode. The full/minimal split existed because full mode was expensive enough
+ * to threaten the process; recording is now a buffered counter increment, so there is
+ * nothing left to switch off. `STATS_ENABLED=false` still disables recording entirely.
  */
 
-const db = require('../cache/database-libsql');
-const { MINIMAL_SCHEMA, FULL_SCHEMA, MIGRATIONS } = require('./schema');
 const StatsDBAsync = require('./stats-db');
 const statsService = require('./stats-service');
+const track = require('./track');
+const contentLog = require('./content-log');
+const fold = require('./fold');
 const { log } = require('../../src/utils');
 
-/* ------------------------------------------------------------------ */
-/*  Mode detection from STATS_REFRESH_INTERVAL                         */
-/* ------------------------------------------------------------------ */
+const ENABLED = (process.env.STATS_ENABLED || '').toLowerCase() !== 'false';
 
-function resolveMode() {
-    const raw = (process.env.STATS_REFRESH_INTERVAL || '').trim().toLowerCase();
+const statsDB = new StatsDBAsync(() => ENABLED, () => ENABLED);
 
-    // Not set / empty → minimal (default)
-    if (raw === '' || raw === 'minimal') return 'minimal';
-
-    // "0" → disabled
-    if (raw === '0') return 'disabled';
-
-    // Number > 0 → full
-    const parsed = parseInt(raw, 10);
-    if (!Number.isNaN(parsed) && parsed > 0) return 'full';
-
-    // Fallback
-    return 'minimal';
-}
-
-function resolveRefreshInterval() {
-    const raw = (process.env.STATS_REFRESH_INTERVAL || '').trim();
-    const parsed = parseInt(raw, 10);
-    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
-    // Minimal mode default: 5 minutes
-    if (STATS_MODE === 'minimal') return 5 * 60 * 1000;
-    return 0;
-}
-
-const STATS_MODE = resolveMode();
-const STATS_REFRESH_INTERVAL = resolveRefreshInterval();
-
-function getStatsMode()   { return STATS_MODE; }
-function isFullStats()    { return STATS_MODE === 'full'; }
-function isMinimalStats() { return STATS_MODE === 'minimal'; }
-function isStatsEnabled() { return STATS_MODE !== 'disabled'; }
-
-/* ------------------------------------------------------------------ */
-/*  StatsDB instance                                                   */
-/* ------------------------------------------------------------------ */
-
-const statsDB = new StatsDBAsync(
-    () => STATS_MODE === 'full',
-    () => STATS_MODE === 'full' || STATS_MODE === 'minimal'
-);
-
-statsService.init(statsDB, getStatsMode, queueWrite);
-
-/* ------------------------------------------------------------------ */
-/*  Write batching - buffer DB writes, flush periodically              */
-/* ------------------------------------------------------------------ */
-
-const FLUSH_INTERVAL_MS = 10_000; // flush every 10s
-let _pendingWrites = [];
-let _flushTimer = null;
-
-/**
- * Queue a fire-and-forget DB write. Flushed in batches.
- */
-function queueWrite(fn) {
-    _pendingWrites.push(fn);
-}
-
-async function flushWrites() {
-    if (_pendingWrites.length === 0) return;
-    const batch = _pendingWrites.splice(0, _pendingWrites.length);
-    try {
-        await Promise.allSettled(batch.map(fn => fn()));
-    } catch (err) {
-        log('debug', `[stats] batch flush error: ${err.message}`);
-    }
-}
-
-function startFlushTimer() {
-    if (_flushTimer) return;
-    _flushTimer = setInterval(() => {
-        flushWrites().catch(() => {});
-    }, FLUSH_INTERVAL_MS);
-    if (_flushTimer.unref) _flushTimer.unref();
-}
+statsService.init(statsDB, () => (ENABLED ? 'full' : 'disabled'));
 
 /* ---------------------------------- */
 /*  Stats response cache              */
 /* ---------------------------------- */
 
+const STATS_CACHE_TTL_MS = 30_000;
 let _cachedStatsResponse = null;
 let _cachedStatsAt = 0;
-const STATS_CACHE_TTL_MS = 30_000; // serve cached stats for 30s
 
 async function getCachedStats() {
     if (_cachedStatsResponse && (Date.now() - _cachedStatsAt) < STATS_CACHE_TTL_MS) {
@@ -126,50 +44,39 @@ function invalidateStatsCache() {
     _cachedStatsAt = 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Initialisation (call once from server/worker bootstrap)            */
-/* ------------------------------------------------------------------ */
-
 let _initDone = false;
 
+/** Schema is owned by infra/db; this only starts the delta flush loop. */
 async function initStats() {
     if (_initDone) return;
     _initDone = true;
 
-    if (STATS_MODE === 'disabled') {
-        log('info', '[stats] mode=disabled - no tables created');
+    if (!ENABLED) {
+        log('info', '[stats] disabled by STATS_ENABLED=false');
         return;
     }
-
-    const schemaSQL = STATS_MODE === 'full' ? FULL_SCHEMA : MINIMAL_SCHEMA;
-    try {
-        await db.executeMultiple(schemaSQL);
-        // Run migrations for existing databases (safe to re-run)
-        if (STATS_MODE === 'full' && MIGRATIONS && MIGRATIONS.length > 0) {
-            for (const sql of MIGRATIONS) {
-                try { await db.execute(sql); } catch (_) { /* column already exists */ }
-            }
-        }
-        log('info', `[stats] mode=${STATS_MODE} - tables created (refresh=${STATS_REFRESH_INTERVAL}ms)`);
-    } catch (err) {
-        log('error', `[stats] schema init failed: ${err.message}`);
-    }
-
-    startFlushTimer();
+    track.start();
+    log('info', `[stats] recording enabled (flush every ${track.FLUSH_MS}ms)`);
 }
+
+async function flushWrites() {
+    return track.flush();
+}
+
+function isStatsEnabled() { return ENABLED; }
 
 module.exports = {
     statsDB,
     statsService,
+    track,
+    contentLog,
+    fold,
     initStats,
-    getStatsMode,
-    isFullStats,
-    isMinimalStats,
-    isStatsEnabled,
-    STATS_MODE,
-    STATS_REFRESH_INTERVAL,
-    queueWrite,
     flushWrites,
+    isStatsEnabled,
     getCachedStats,
-    invalidateStatsCache
+    invalidateStatsCache,
+    // The page and its API are available to everyone whenever stats are on.
+    isFullStats: isStatsEnabled,
+    getStatsMode: () => (ENABLED ? 'full' : 'disabled')
 };

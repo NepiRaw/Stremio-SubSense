@@ -1,6 +1,9 @@
 'use strict';
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
+const redisInfra = require('../infra/redis');
+
+const WYZIE_POOL_KEY = 'ss:wyzie:pool';
 const { log } = require('../utils');
 
 // =====================================================
@@ -14,6 +17,49 @@ class WyzieKeyPool {
     constructor(keys = []) {
         this.keys = keys.filter(k => k && k.length > 10);
         this.state = new Map();
+        this._syncTimer = null;
+    }
+
+    /**
+     * Keys are billed per account, not per process, so quota state is shared. Publishing is
+     * fire-and-forget and refreshing is periodic, which keeps key selection synchronous.
+     */
+    _publish(key) {
+        const s = this.state.get(key);
+        if (!s) return;
+        redisInfra.safe(r => r.hset(WYZIE_POOL_KEY, key, JSON.stringify({
+            remaining: s.remaining, limit: s.limit, resetAt: s.resetAt, keyType: s.keyType
+        })), null).catch(() => {});
+    }
+
+    async syncFromRedis() {
+        const hash = await redisInfra.safe(r => r.hgetall(WYZIE_POOL_KEY), null);
+        if (!hash) return 0;
+        let applied = 0;
+        for (const [key, raw] of Object.entries(hash)) {
+            if (!this.keys.includes(key)) continue;
+            let shared;
+            try { shared = JSON.parse(raw); } catch { continue; }
+            const local = this.state.get(key) || {};
+            // The lower remaining count is the safer view of a shared quota.
+            const merged = { ...local, ...shared };
+            if (local.remaining != null && shared.remaining != null) {
+                merged.remaining = Math.min(local.remaining, shared.remaining);
+            }
+            this.state.set(key, merged);
+            applied++;
+        }
+        return applied;
+    }
+
+    startSync(intervalMs = 10_000) {
+        if (this._syncTimer) return;
+        this._syncTimer = setInterval(() => { this.syncFromRedis().catch(() => {}); }, intervalMs);
+        if (this._syncTimer.unref) this._syncTimer.unref();
+    }
+
+    stopSync() {
+        if (this._syncTimer) { clearInterval(this._syncTimer); this._syncTimer = null; }
     }
 
     static fromEnv() {
@@ -68,6 +114,7 @@ class WyzieKeyPool {
         const s = this.state.get(key) || { limit: 1000, resetAt: this._nextMidnightUTC() };
         s.remaining = 0;
         this.state.set(key, s);
+        this._publish(key);
     }
 
     updateFromHeaders(key, headers) {
@@ -82,6 +129,8 @@ class WyzieKeyPool {
         s.resetAt = !isNaN(reset) ? reset * 1000 : this._nextMidnightUTC();
         s.lastChecked = Date.now();
         this.state.set(key, s);
+
+        this._publish(key);
 
         if (remaining <= 5) {
             log('warn', `[WyzieKeyPool] Key ${key.slice(0, 12)}... nearly exhausted: ${remaining}/${limit} remaining`);
@@ -160,6 +209,8 @@ class WyzieKeyPool {
             await this.detectKeyType(key);
             await this.fetchSources(key);
         }));
+        await this.syncFromRedis().catch(() => {});
+        this.startSync();
     }
 
     getStatus() {
