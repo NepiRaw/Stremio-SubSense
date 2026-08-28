@@ -20,7 +20,6 @@ const { initDetailCache } = require('./src/utils/animetoshoApi');
 
 const { registerDefaultProviders } = require('./src/providers');
 const routes = require('./src/routes');
-const db = require('./src/cache/database-libsql');
 const infra = require('./src/infra/db');
 const redis = require('./src/infra/redis');
 const { initStats, getStatsMode, flushWrites } = require('./src/stats');
@@ -67,7 +66,6 @@ async function bootstrap() {
 
     await infra.initAll();
     await redis.connect();
-    await db.initializeDatabase();
     await initStats();
     log('info', `[server] stats mode: ${getStatsMode()}`);
 
@@ -137,7 +135,6 @@ function installShutdownHandlers(server) {
                 await flushWrites();
                 await redis.close();
                 infra.close();
-                db.close();
             } catch (closeErr) {
                 log('warn', `[server] close error: ${closeErr.message}`);
             }
