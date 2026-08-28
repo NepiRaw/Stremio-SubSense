@@ -2,7 +2,7 @@
 
 const { mapStremioToWyzie, mapWyzieToStremio } = require('../../src/languages');
 const { log } = require('../../src/utils');
-const { SUBSRC_KEY_PLACEHOLDER } = require('../cache/ResponseCache');
+const { SUBSRC_KEY_PLACEHOLDER } = require('../cache/response-cache');
 const { getSourceDisplayName } = require('../providers/WyzieProvider');
 
 const PROXY_BASE_URL = process.env.SUBSENSE_BASE_URL ||

@@ -17,9 +17,10 @@ const { initAnidbCache, isAnidbConfigured } = require('./src/utils/anidbApi');
 const { initDetailCache } = require('./src/utils/animetoshoApi');
 
 const { registerDefaultProviders } = require('./src/providers');
-const { warmupResponseCache } = require('./src/handlers/subtitles');
 const routes = require('./src/routes');
 const db = require('./src/cache/database-libsql');
+const infra = require('./src/infra/db');
+const redis = require('./src/infra/redis');
 const { initStats, getStatsMode, isFullStats, statsDB } = require('./src/stats');
 
 const PORT = parseInt(process.env.PORT, 10) || 3100;
@@ -52,6 +53,8 @@ async function bootstrap() {
         res.status(500).json({ error: 'Internal error' });
     });
 
+    await infra.initAll();
+    await redis.connect();
     await db.initializeDatabase();
     await initStats();
     log('info', `[server] stats mode: ${getStatsMode()}`);
@@ -70,20 +73,19 @@ async function bootstrap() {
         initWyzieSources().catch((err) => log('warn', `[server] Wyzie init failed: ${err.message}`)),
         wyzieProvider ? wyzieProvider.initialize().catch((err) => log('warn', `[server] Wyzie key pool init failed: ${err.message}`)) : Promise.resolve(),
         initAnimeLists().catch((err) => log('warn', `[server] AnimeLists init failed: ${err.message}`)),
-        preloadParser().catch((err) => log('warn', `[server] parser preload failed: ${err.message}`)),
-        warmupResponseCache().catch((err) => log('warn', `[server] cache warmup failed: ${err.message}`))
+        preloadParser().catch((err) => log('warn', `[server] parser preload failed: ${err.message}`))
     ];
 
     if (isAnidbConfigured()) {
         initTasks.push(
-            initAnidbCache(db).catch((err) => log('warn', `[server] AniDB cache init failed: ${err.message}`))
+            initAnidbCache(infra.metaDb).catch((err) => log('warn', `[server] AniDB cache init failed: ${err.message}`))
         );
     } else {
         log('info', '[server] AniDB not configured (ANIDB_CLIENT / ANIDB_CLIENT_VER not set) — AnimeTosho TV episode search disabled, movies still available');
     }
 
     initTasks.push(
-        initDetailCache(db).catch((err) => log('warn', `[server] AT detail cache init failed: ${err.message}`))
+        initDetailCache(infra.metaDb).catch((err) => log('warn', `[server] AT detail cache init failed: ${err.message}`))
     );
 
     await Promise.allSettled(initTasks);
@@ -121,12 +123,14 @@ function installShutdownHandlers(server) {
         }, SHUTDOWN_TIMEOUT_MS);
         forceTimer.unref();
 
-        server.close((err) => {
+        server.close(async (err) => {
             if (err) log('warn', `[server] close error: ${err.message}`);
             try {
+                await redis.close();
+                infra.close();
                 db.close();
-            } catch (dbErr) {
-                log('warn', `[server] db close error: ${dbErr.message}`);
+            } catch (closeErr) {
+                log('warn', `[server] close error: ${closeErr.message}`);
             }
             log('info', '[server] shutdown complete');
             process.exit(0);

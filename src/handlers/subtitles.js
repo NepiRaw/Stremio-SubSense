@@ -3,7 +3,10 @@
 const { log, parseStremioId } = require('../../src/utils');
 const { mapStremioToWyzie } = require('../../src/languages');
 const { providerManager } = require('../providers');
-const { ResponseCache, SubtitleCache } = require('../cache');
+const l1 = require('../cache/response-cache');
+const l2 = require('../cache/subtitle-store');
+const inflight = require('../cache/inflight');
+const metrics = require('../infra/metrics');
 const { prioritizeByLanguage, formatForStremio } = require('../utils/format');
 const { validateWyzieUrls } = require('../utils/validateWyzie');
 const { statsService } = require('../stats');
@@ -15,35 +18,21 @@ try {
     log('warn', '[handlers/subtitles] crypto unavailable; SubSource downloads will be limited');
 }
 
-const responseCache = new ResponseCache();
-const subtitleCache = new SubtitleCache();
-
 const STREMIO_UA_RE = /stremio|com\.stremio|libmpv/i;
 const OS_DIRECT_URL_RE = /^https?:\/\/dl\.opensubtitles\.org\//;
 const OS_PROXIED_URL_RE = /\/api\/subtitle\/(?:vtt|srt|ass)\/(https?:\/\/dl\.opensubtitles\.org\/[^\s]+)/;
 
-/**
- * Detect if the request comes from a Stremio app (has streaming server on 11470).
- * Strict: only returns true when UA explicitly identifies as Stremio.
- */
 function isStremioClient(userAgent) {
     return STREMIO_UA_RE.test(userAgent || '');
 }
 
-/**
- * Extract the raw OS download URL, whether it's direct or wrapped in a proxy path.
- */
 function extractOsUrl(url) {
     if (!url) return null;
     if (OS_DIRECT_URL_RE.test(url)) return url;
     const match = url.match(OS_PROXIED_URL_RE);
-    if (match) return match[1];
-    return null;
+    return match ? match[1] : null;
 }
 
-/**
- * Determine subtitle format from URL extension.
- */
 function getSubtitleFormat(url) {
     const ext = url.match(/\.(\w+)$/)?.[1]?.toLowerCase();
     if (ext === 'ass' || ext === 'ssa') return 'ass';
@@ -70,18 +59,16 @@ function applyStreamingServerWrap(subtitles, userAgent) {
 }
 
 /**
- * Resolve a subtitle request end-to-end.
+ * Resolve a subtitle request.
  *
- * Hot path:
- *   1. L1 ResponseCache.get -> fresh hit returns immediately
- *   2. (stale hit) returns stale + schedules background refresh
- *   3. miss -> providerManager.searchAll, format, populate L1, persist L2
- *      (writes are fire-and-forget; never awaited on the response path)
- *
- * No DB read or write is ever awaited before responding to the client.
+ * L1 (Redis) -> L2 (cache.db) -> providers. A hit reads no SQLite and calls no upstream:
+ * dead-URL filtering happens when an entry is written, not when it is served. Persistence
+ * and stats are never awaited before responding.
  */
 async function handleSubtitlesRequest(args, parsedConfig) {
     const startedAt = Date.now();
+    metrics.recordRequest();
+
     const parsed = parseStremioId(args.id);
     const languages = parsedConfig.languages || [];
     const wyzieLanguages = languages.map(mapStremioToWyzie).filter(Boolean);
@@ -90,25 +77,15 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const apiKey = parsedConfig.subsourceApiKey || null;
     const subdlApiKey = parsedConfig.subdlApiKey || null;
     const wyzieApiKey = parsedConfig.wyzieApiKey || null;
-    const encryptedApiKey = apiKey && encryptConfig
-        ? safeEncrypt({ apiKey })
-        : null;
+    const encryptedApiKey = apiKey && encryptConfig ? safeEncrypt({ apiKey }) : null;
 
     const sessionInfo = parsedConfig.userId ? `session=${parsedConfig.userId}` : 'no-session';
     const idTag = `${parsed.imdbId}${parsed.season != null ? `:${parsed.season}:${parsed.episode}` : ''}`;
     log('info', `[Request] ${sessionInfo} ${parsed.type} ${idTag} langs=[${languages.join(',')}]${filename ? ` file="${filename}"` : ''}`);
     if (userAgent) log('debug', `[Request] UA: ${userAgent.substring(0, 120)} stremio=${isStremioClient(userAgent)}`);
-    const cacheKey = ResponseCache.buildKey(
-        parsed.imdbId,
-        parsed.season,
-        parsed.episode,
-        wyzieLanguages,
-        { keepAss: parsedConfig.keepAss }
-    );
 
-    if (parsedConfig.keepAss) {
-        log('debug', `[handler] keepAss=true ${reqTag(parsed, wyzieLanguages)}`);
-    }
+    const cacheKey = l1.buildKey(parsed.imdbId, parsed.season, parsed.episode, wyzieLanguages,
+        { keepAss: parsedConfig.keepAss });
 
     const requestContext = {
         videoFilename: filename,
@@ -117,33 +94,42 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         maxPerLang: parsedConfig.maxSubtitles || 0
     };
 
-    const cached = responseCache.get(cacheKey, requestContext);
+    const cached = await l1.get(cacheKey, requestContext);
     if (cached) {
-        log('info',
-            `[handler] cache-${cached.status} ${reqTag(parsed, wyzieLanguages)} -> ${cached.subtitles.length} subs in ${Date.now() - startedAt}ms`);
+        metrics.recordCache('l1');
+        log('info', `[handler] cache-${cached.status} ${reqTag(parsed, wyzieLanguages)} -> ${cached.subtitles.length} subs in ${Date.now() - startedAt}ms`);
         if (cached.status === 'stale') {
-            scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey, requestContext);
+            scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
         }
-        const validated = await validateWyzieUrls(cached.subtitles);
-        fireTrack(parsedConfig, parsed, languages, validated, Date.now() - startedAt, true);
-        return { subtitles: applyStreamingServerWrap(validated, userAgent) };
+        fireTrack(parsedConfig, parsed, languages, cached.subtitles, Date.now() - startedAt, true);
+        return { subtitles: applyStreamingServerWrap(cached.subtitles, userAgent) };
     }
 
-    // L2 fallback: language-agnostic lookup before hitting providers
-    const l2Hit = await subtitleCache.getByContent(parsed.imdbId, parsed.season, parsed.episode, languages);
+    const l2Hit = await l2.getByContent(parsed.imdbId, parsed.season, parsed.episode, languages);
     if (l2Hit && l2Hit.subtitles.length > 0) {
-        responseCache.set(cacheKey, l2Hit.subtitles);
-        const l2Subs = responseCache.get(cacheKey, requestContext);
-        const returnedL2 = l2Subs ? l2Subs.subtitles : l2Hit.subtitles;
-        log('info',
-            `[handler] l2-hit ${reqTag(parsed, wyzieLanguages)} -> ${l2Hit.subtitles.length} subs (returning ${returnedL2.length}) in ${Date.now() - startedAt}ms`);
-        const validated = await validateWyzieUrls(returnedL2);
-        fireTrack(parsedConfig, parsed, languages, validated, Date.now() - startedAt, true);
-        return { subtitles: applyStreamingServerWrap(validated, userAgent) };
+        metrics.recordCache('l2');
+        l1.set(cacheKey, l2Hit.subtitles).catch(() => {});
+        const returned = l1.materialize(l2Hit.subtitles, requestContext);
+        log('info', `[handler] l2-hit ${reqTag(parsed, wyzieLanguages)} -> ${l2Hit.subtitles.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
+        fireTrack(parsedConfig, parsed, languages, returned, Date.now() - startedAt, true);
+        return { subtitles: applyStreamingServerWrap(returned, userAgent) };
     }
 
-    const result = await providerManager.searchAll(
-        {
+    // Another worker may already be fetching this key; wait for its result rather than duplicating.
+    const owned = await inflight.acquire(cacheKey);
+    if (!owned) {
+        const waited = await inflight.pollFor(() => l1.get(cacheKey, requestContext));
+        if (waited) {
+            metrics.recordCache('l1');
+            log('info', `[handler] dedup-wait ${reqTag(parsed, wyzieLanguages)} -> ${waited.subtitles.length} subs in ${Date.now() - startedAt}ms`);
+            fireTrack(parsedConfig, parsed, languages, waited.subtitles, Date.now() - startedAt, true);
+            return { subtitles: applyStreamingServerWrap(waited.subtitles, userAgent) };
+        }
+    }
+
+    metrics.recordCache('miss');
+    try {
+        const result = await providerManager.searchAll({
             imdbId: parsed.imdbId,
             season: parsed.season,
             episode: parsed.episode,
@@ -151,32 +137,26 @@ async function handleSubtitlesRequest(args, parsedConfig) {
             filename,
             apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
-        },
-        { dedupeKey: cacheKey }
-    );
+        }, { dedupeKey: cacheKey });
 
-    const remainingBudget = Math.max(0, 8000 - (Date.now() - startedAt));
-    const validatedSubtitles = remainingBudget > 500
-        ? await validateWyzieUrls(result.subtitles, Math.min(remainingBudget, 3000))
-        : result.subtitles;
+        const { formatted, languageMatch } = buildFormatted(result.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });
+        const validated = await validateWyzieUrls(formatted);
 
-    const { formatted, languageMatch } = buildFormatted(validatedSubtitles, languages, 0, { keepAss: parsedConfig.keepAss });
+        l1.set(cacheKey, validated).catch(() => {});
+        l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated)
+            .catch((err) => log('debug', `[handler] L2 write failed: ${err.message}`));
 
-    responseCache.set(cacheKey, formatted);
-    persistL2(parsed, formatted).catch((err) =>
-        log('debug', `[handler] L2 write failed: ${err.message}`));
+        if (Array.isArray(result.backgroundPromises) && result.backgroundPromises.length > 0) {
+            wireBackgroundPromises(result.backgroundPromises, parsed, languages, parsedConfig, cacheKey, validated);
+        }
 
-    if (Array.isArray(result.backgroundPromises) && result.backgroundPromises.length > 0) {
-        wireBackgroundPromises(result.backgroundPromises, parsed, languages, parsedConfig, cacheKey, formatted);
+        const returned = l1.materialize(validated, requestContext);
+        log('info', `[handler] miss ${reqTag(parsed, wyzieLanguages)} -> ${validated.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
+        fireTrack(parsedConfig, parsed, languages, returned, Date.now() - startedAt, false, languageMatch);
+        return { subtitles: applyStreamingServerWrap(returned, userAgent) };
+    } finally {
+        if (owned) inflight.release(cacheKey).catch(() => {});
     }
-
-    const finalSubs = responseCache.get(cacheKey, requestContext);
-    log('info',
-        `[handler] miss ${reqTag(parsed, wyzieLanguages)} -> ${formatted.length} subs (returning ${finalSubs ? finalSubs.subtitles.length : 0}) in ${Date.now() - startedAt}ms`);
-
-    const returnedSubs = finalSubs ? finalSubs.subtitles : formatted;
-    fireTrack(parsedConfig, parsed, languages, returnedSubs, Date.now() - startedAt, false, languageMatch);
-    return { subtitles: applyStreamingServerWrap(returnedSubs, userAgent) };
 }
 
 function fireTrack(parsedConfig, parsed, languages, subtitles, fetchTimeMs, cacheHit, languageMatch) {
@@ -206,19 +186,8 @@ function buildFormatted(rawSubtitles, languages, maxPerLang, opts = {}) {
     return { formatted: formatForStremio(subtitles, opts), languageMatch };
 }
 
-function persistL2(parsed, formatted) {
-    if (!formatted || formatted.length === 0) return Promise.resolve();
-    return subtitleCache.set(
-        parsed.imdbId,
-        parsed.season,
-        parsed.episode,
-        uniqueLangs(formatted),
-        formatted
-    );
-}
-
 function wireBackgroundPromises(promises, parsed, languages, parsedConfig, cacheKey, foregroundFormatted) {
-    Promise.allSettled(promises).then((results) => {
+    Promise.allSettled(promises).then(async (results) => {
         const extra = [];
         for (const r of results) {
             if (r.status !== 'fulfilled' || !r.value) continue;
@@ -232,9 +201,10 @@ function wireBackgroundPromises(promises, parsed, languages, parsedConfig, cache
         const added = merged.length - foregroundFormatted.length;
         if (added <= 0) return;
 
-        responseCache.set(cacheKey, merged);
-        persistL2(parsed, merged).catch(() => {});
-        log('info', `[handler] bg-warm ${reqTag(parsed, uniqueLangs(merged))} -> ${merged.length} subs (+${added})`);
+        const validated = await validateWyzieUrls(merged);
+        await l1.set(cacheKey, validated);
+        l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated).catch(() => {});
+        log('info', `[handler] bg-warm ${reqTag(parsed, uniqueLangs(validated))} -> ${validated.length} subs (+${added})`);
     }).catch((err) => log('debug', `[handler] bg error: ${err.message}`));
 }
 
@@ -254,28 +224,35 @@ function mergeFormatted(existing, extra) {
     return out;
 }
 
-function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey, requestContext) {
+function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey) {
     const subdlApiKey = parsedConfig.subdlApiKey || null;
     const wyzieApiKey = parsedConfig.wyzieApiKey || null;
-    setImmediate(() => {
-        providerManager.searchAll({
-            imdbId: parsed.imdbId,
-            season: parsed.season,
-            episode: parsed.episode,
-            languages: wyzieLanguages,
-            filename,
-            apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
-            encryptedApiKeys: { subsource: encryptedApiKey }
-        }, { dedupeKey: `${cacheKey}:refresh` })
-            .then((res) => {
-                const { formatted } = buildFormatted(res.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });
-                if (formatted.length > 0) {
-                    responseCache.set(cacheKey, formatted);
-                    persistL2(parsed, formatted).catch(() => {});
-                    log('info', `[handler] stale-refresh ${reqTag(parsed, wyzieLanguages)} -> ${formatted.length} subs`);
-                }
-            })
-            .catch((err) => log('debug', `[handler] stale-refresh failed: ${err.message}`));
+    setImmediate(async () => {
+        // One refresh per key across all workers; the rest keep serving the stale entry.
+        if (!await inflight.acquire(`${cacheKey}:refresh`, 30)) return;
+        try {
+            const res = await providerManager.searchAll({
+                imdbId: parsed.imdbId,
+                season: parsed.season,
+                episode: parsed.episode,
+                languages: wyzieLanguages,
+                filename,
+                apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
+                encryptedApiKeys: { subsource: encryptedApiKey }
+            }, { dedupeKey: `${cacheKey}:refresh` });
+
+            const { formatted } = buildFormatted(res.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });
+            if (formatted.length === 0) return;
+
+            const validated = await validateWyzieUrls(formatted);
+            await l1.set(cacheKey, validated);
+            l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated).catch(() => {});
+            log('info', `[handler] stale-refresh ${reqTag(parsed, wyzieLanguages)} -> ${validated.length} subs`);
+        } catch (err) {
+            log('debug', `[handler] stale-refresh failed: ${err.message}`);
+        } finally {
+            inflight.release(`${cacheKey}:refresh`).catch(() => {});
+        }
     });
 }
 
@@ -299,65 +276,8 @@ function safeEncrypt(payload) {
     try { return encryptConfig(payload); } catch (_) { return null; }
 }
 
-async function warmupResponseCache() {
-    try {
-        const memBefore = process.memoryUsage();
-        const t0 = Date.now();
-
-        const entries = await subtitleCache.loadAllForWarmup();
-        if (entries.length > 0) {
-            // Group by content (imdb:s:e) and merge all subs
-            const contentMap = new Map();
-            for (const entry of entries) {
-                const parts = entry.key.split(':');
-                if (parts.length < 4) continue;
-                const contentKey = parts.slice(0, 3).join(':');
-                if (!contentMap.has(contentKey)) {
-                    contentMap.set(contentKey, []);
-                }
-                const existing = contentMap.get(contentKey);
-                const existingIds = new Set(existing.map(s => s.id));
-                for (const sub of entry.subtitles) {
-                    if (sub.id && !existingIds.has(sub.id)) {
-                        existing.push(sub);
-                        existingIds.add(sub.id);
-                    }
-                }
-            }
-
-            // Create L1 entries: one per content with union of all languages
-            const warmupEntries = [];
-            for (const [contentKey, subs] of contentMap) {
-                const allLangs = new Set();
-                for (const sub of subs) {
-                    if (sub.lang) allLangs.add(mapStremioToWyzie(sub.lang) || sub.lang);
-                }
-                const langKey = Array.from(allLangs).sort().join(',');
-                warmupEntries.push({ key: `${contentKey}:${langKey}`, subtitles: subs });
-            }
-
-            responseCache.warmup(warmupEntries);
-            const memAfter = process.memoryUsage();
-            const elapsed = Date.now() - t0;
-            const heapDeltaMB = ((memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024).toFixed(1);
-            const rssDeltaMB = ((memAfter.rss - memBefore.rss) / 1024 / 1024).toFixed(1);
-            log('info', `[handler] warmed ResponseCache with ${warmupEntries.length} entries (from ${entries.length} rows) in ${elapsed}ms (heap +${heapDeltaMB}MB, rss +${rssDeltaMB}MB)`);
-        } else {
-            log('info', '[handler] warmup skipped: no L2 entries');
-        }
-    } catch (err) {
-        log('warn', `[handler] warmup failed: ${err.message}`);
-    }
+async function getCacheStats() {
+    return l1.stats();
 }
 
-function getCacheStats() {
-    return responseCache.stats();
-}
-
-module.exports = {
-    handleSubtitlesRequest,
-    warmupResponseCache,
-    getCacheStats,
-    responseCache,
-    subtitleCache
-};
+module.exports = { handleSubtitlesRequest, getCacheStats };
