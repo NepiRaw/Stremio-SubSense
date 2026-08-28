@@ -262,6 +262,25 @@ async function rotationTablesWithForeignKeys() {
     return offenders;
 }
 
+/** Small durable markers on stats.db. Written by the worker, read by the health probe. */
+const KV = {
+    workerHeartbeat: 'health:worker_at',
+    lastFold: 'health:last_fold_at'
+};
+
+async function kvGet(key) {
+    const r = await clients.stats.execute({ sql: 'SELECT value FROM kv WHERE key = ?', args: [key] });
+    return r.rows[0]?.value ?? null;
+}
+
+async function kvSet(key, value) {
+    await clients.stats.execute({
+        sql: `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, strftime('%s','now'))
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        args: [key, value]
+    });
+}
+
 let initialized = false;
 let initPromise = null;
 
@@ -312,6 +331,9 @@ module.exports = {
     metaDb:  clients.meta,
     clients,
     initAll,
+    kvGet,
+    kvSet,
+    KV,
     verifyPragmas,
     rotationTablesWithForeignKeys,
     close,

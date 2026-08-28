@@ -162,6 +162,26 @@ Access the stats dashboard at `/stats` to view:
 
 Browse cached content at `/stats/content`.
 
+### Health Endpoints
+
+| Endpoint | Cost | Use it for |
+|----------|------|------------|
+| `/health` | In-process only, no I/O | The Docker healthcheck. Answers whether this process can still serve |
+| `/health/deep` | Queries every dependency | An uptime monitor. Answers whether the whole addon is working |
+| `/metrics` | In-process only | Scraping counters: request rate, event-loop lag, cache hit rate, per-provider latency and yield |
+
+`/health/deep` returns `200` when everything is current and `503` when anything is not, with
+a `degraded` array naming each problem:
+
+| Reason | Meaning |
+|--------|---------|
+| `db:cache` / `db:stats` / `db:meta` | That SQLite file did not answer `SELECT 1` |
+| `redis` | Redis is unreachable. Serving continues from SQLite, analytics stop |
+| `queue-depth` | The content-log queue is near `CL_QUEUE_MAX`, so the worker is not draining fast enough |
+| `worker-heartbeat` | The maintenance worker has not checked in. It is stopped, stuck, or has never run |
+| `fold-stale` | Analytics deltas are not being folded, so `/stats` is going stale |
+
+
 ### Disabling Stats (Resource Optimization)
 
 The stats system has three modes controlled by `STATS_REFRESH_INTERVAL`:

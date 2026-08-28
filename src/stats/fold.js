@@ -8,7 +8,7 @@
  * crash between the clear and the write is one interval of analytics, never serving data.
  */
 
-const { statsDb } = require('../infra/db');
+const { statsDb, kvSet, KV } = require('../infra/db');
 const { redis, isHealthy } = require('../infra/redis');
 const { log } = require('../../src/utils');
 const { K, dateKey } = require('./track');
@@ -286,14 +286,27 @@ async function foldAll({ deadline = Infinity } = {}) {
         ['dailyUsers', foldDailyUsers]
     ];
     for (const [name, fn] of steps) {
-        if (Date.now() >= deadline) return { done: false, ...summary };
+        if (Date.now() >= deadline) {
+            await stampFold();
+            return { done: false, ...summary };
+        }
         try {
             summary[name] = await fn();
         } catch (err) {
             log('error', `[fold] ${name} failed: ${err.message}`);
         }
     }
+    await stampFold();
     return { done: true, ...summary };
+}
+
+/** Marks that folding ran, so a stalled worker is visible on /health/deep. */
+async function stampFold() {
+    try {
+        await kvSet(KV.lastFold, String(Date.now()));
+    } catch (err) {
+        log('warn', `[fold] could not record the fold timestamp: ${err.message}`);
+    }
 }
 
 module.exports = {

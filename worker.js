@@ -72,6 +72,8 @@ async function writeHealthSnapshot() {
     } catch (err) {
         log('warn', `[worker] health snapshot write failed: ${err.message}`);
     }
+
+    await infra.kvSet(infra.KV.workerHeartbeat, String(Date.now()));
     return { done: true };
 }
 

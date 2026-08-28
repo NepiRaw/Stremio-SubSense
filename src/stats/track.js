@@ -306,5 +306,5 @@ function pending() {
 
 module.exports = {
     counter, daily, provider, language, combo, dist, user, content, responseTime,
-    flush, start, stop, pending, dateKey, K, FLUSH_MS
+    flush, start, stop, pending, dateKey, K, FLUSH_MS, CL_QUEUE_MAX
 };

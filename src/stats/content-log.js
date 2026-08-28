@@ -9,7 +9,7 @@
  * correct after arbitrary downtime.
  */
 
-const { statsDb, CONTENT_LOG_TABLES } = require('../infra/db');
+const { statsDb, CONTENT_LOG_TABLES, kvGet, kvSet } = require('../infra/db');
 const { redis, isHealthy } = require('../infra/redis');
 const { log } = require('../../src/utils');
 const { K, dateKey } = require('./track');
@@ -25,19 +25,6 @@ function dayNumber(date = new Date()) {
 
 function tableFor(date = new Date()) {
     return CONTENT_LOG_TABLES[((dayNumber(date) % 7) + 7) % 7];
-}
-
-async function kvGet(key) {
-    const r = await statsDb.execute({ sql: 'SELECT value FROM kv WHERE key = ?', args: [key] });
-    return r.rows[0]?.value ?? null;
-}
-
-async function kvSet(key, value) {
-    await statsDb.execute({
-        sql: `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, strftime('%s','now'))
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-        args: [key, value]
-    });
 }
 
 /**
