@@ -110,7 +110,8 @@ function trackRequest(data) {
         series: isSeries,
         subtitles: subtitleCount,
         any_pref_found: languageMatch && languageMatch.anyPreferredFound ? 1 : 0,
-        all_pref_found: languageMatch && languageMatch.allPreferredFound ? 1 : 0
+        all_pref_found: languageMatch && languageMatch.allPreferredFound ? 1 : 0,
+        pref_tracked: languageMatch ? 1 : 0
     });
 
     if (languages.length > 0) {

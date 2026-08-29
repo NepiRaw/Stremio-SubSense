@@ -59,7 +59,7 @@ async function foldCounters() {
 }
 
 const DAILY_FIELDS = ['requests', 'cache_hits', 'cache_misses', 'conversions', 'movies', 'series',
-    'subtitles', 'any_pref_found', 'all_pref_found'];
+    'subtitles', 'any_pref_found', 'all_pref_found', 'pref_tracked'];
 
 async function foldDaily() {
     const keys = await scanKeys('ss:daily:*');
