@@ -1,6 +1,6 @@
 'use strict';
 
-const { mapStremioToWyzie, mapWyzieToStremio } = require('../../src/languages');
+const { mapStremioToWyzie, mapWyzieToStremio, toCanonical } = require('../../src/languages');
 const { log } = require('../../src/utils');
 const { SUBSRC_KEY_PLACEHOLDER } = require('../cache/response-cache');
 const { getSourceDisplayName } = require('../providers/WyzieProvider');
@@ -23,21 +23,32 @@ const PROXY_BASE_URL = process.env.SUBSENSE_BASE_URL ||
  */
 function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
     const wantedPairs = languages
-        .map((stremio) => ({ stremio, wyzie: (mapStremioToWyzie(stremio) || '').toLowerCase() }))
+        .map((stremio) => ({
+            stremio,
+            tag: stremio.toLowerCase(),
+            wyzie: (mapStremioToWyzie(stremio) || '').toLowerCase()
+        }))
         .filter((p) => p.wyzie);
 
     const byLanguage = Object.create(null);
     for (const lang of languages) byLanguage[lang] = [];
     const others = [];
+    const exactMatches = new Set();
 
     for (const sub of subtitles) {
-        const subLang = (sub.lang || sub.language || '').toLowerCase().substring(0, 2);
-        const matched = wantedPairs.find((p) => p.wyzie === subLang);
-        if (matched) byLanguage[matched.stremio].push(sub);
-        else others.push(sub);
+        const subLang = (sub.lang || sub.language || '').toLowerCase();
+        const subBase = subLang.split('-')[0];
+        const exact = wantedPairs.find((p) => p.tag === subLang);
+        const matched = exact || wantedPairs.find((p) => p.wyzie === subBase);
+        if (matched) {
+            byLanguage[matched.stremio].push(sub);
+            if (exact) exactMatches.add(sub);
+        } else others.push(sub);
     }
 
-    for (const lang of languages) byLanguage[lang].sort(qualityRank);
+    const rankExactFirst = (a, b) =>
+        (exactMatches.has(b) ? 1 : 0) - (exactMatches.has(a) ? 1 : 0) || qualityRank(a, b);
+    for (const lang of languages) byLanguage[lang].sort(rankExactFirst);
     others.sort(qualityRank);
 
     const out = [];
@@ -61,6 +72,16 @@ function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
 }
 
 /**
+ * Stremio wants a 3-letter code, and a regional variant has no 3-letter form,
+ * so the tag is emitted as-is for those.
+ */
+function toStremioLang(code) {
+    const canonical = toCanonical(code);
+    if (!canonical) return mapWyzieToStremio(String(code).substring(0, 2));
+    return canonical.includes('-') ? canonical : mapWyzieToStremio(canonical);
+}
+
+/**
  * Format provider subtitles for Stremio.
  *
  * For ASS/SSA sources we emit two entries per subtitle so the user can pick:
@@ -77,7 +98,7 @@ function formatForStremio(subtitles, opts = {}) {
 
     for (const sub of subtitles) {
         const subLang = sub.lang || sub.language || 'und';
-        const lang = mapWyzieToStremio(subLang.substring(0, 2));
+        const lang = toStremioLang(subLang);
         const source = Array.isArray(sub.source) ? sub.source[0] : (sub.source || 'Unknown');
         const isHI = !!(sub.hearingImpaired || sub.isHearingImpaired || sub.hi);
         const release = sub.releaseName || sub.release || sub.media || '';

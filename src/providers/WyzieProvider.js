@@ -5,6 +5,7 @@ const redisInfra = require('../infra/redis');
 
 const WYZIE_POOL_KEY = 'ss:wyzie:pool';
 const { log } = require('../utils');
+const { mapStremioToWyzie } = require('../languages');
 
 // =====================================================
 // Wyzie Key Pool
@@ -462,7 +463,8 @@ class WyzieProvider extends BaseProvider {
     async search(query) {
         if (!this.enabled) return { subtitles: [] };
 
-        const languages = Array.isArray(query.languages) ? query.languages : [];
+        const canonical = Array.isArray(query.languages) ? query.languages : [];
+        const languages = canonical.map(mapStremioToWyzie).filter(Boolean);
         const startedAt = Date.now();
 
         try {

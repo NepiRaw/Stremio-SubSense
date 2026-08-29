@@ -191,7 +191,8 @@ function applyUrlConfig(config) {
         document.querySelectorAll('.multi-select-chip').forEach(c => c.remove());
 
         for (const lang of config.languages) {
-            const found = LANGUAGES.find(l => l.code === lang || l.code === lang.substring(0, 2));
+            const found = LANGUAGES.find(l => l.code === lang)
+                || LANGUAGES.find(l => l.code === lang.substring(0, 2));
             if (found && !selectedLanguages.includes(found.code)) {
                 selectedLanguages.push(found.code);
                 addChip(found.code);

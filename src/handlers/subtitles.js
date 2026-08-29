@@ -1,7 +1,6 @@
 'use strict';
 
 const { log, parseStremioId } = require('../../src/utils');
-const { mapStremioToWyzie } = require('../../src/languages');
 const { providerManager } = require('../providers');
 const l1 = require('../cache/response-cache');
 const l2 = require('../cache/subtitle-store');
@@ -71,7 +70,6 @@ async function handleSubtitlesRequest(args, parsedConfig) {
 
     const parsed = parseStremioId(args.id);
     const languages = parsedConfig.languages || [];
-    const wyzieLanguages = languages.map(mapStremioToWyzie).filter(Boolean);
     const userAgent = parsedConfig._userAgent || '';
     const filename = (args.extra && args.extra.filename) || null;
     const apiKey = parsedConfig.subsourceApiKey || null;
@@ -84,7 +82,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     log('info', `[Request] ${sessionInfo} ${parsed.type} ${idTag} langs=[${languages.join(',')}]${filename ? ` file="${filename}"` : ''}`);
     if (userAgent) log('debug', `[Request] UA: ${userAgent.substring(0, 120)} stremio=${isStremioClient(userAgent)}`);
 
-    const cacheKey = l1.buildKey(parsed.imdbId, parsed.season, parsed.episode, wyzieLanguages,
+    const cacheKey = l1.buildKey(parsed.imdbId, parsed.season, parsed.episode, languages,
         { keepAss: parsedConfig.keepAss });
 
     const requestContext = {
@@ -97,9 +95,9 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const cached = await l1.get(cacheKey, requestContext);
     if (cached) {
         metrics.recordCache('l1');
-        log('info', `[handler] cache-${cached.status} ${reqTag(parsed, wyzieLanguages)} -> ${cached.subtitles.length} subs in ${Date.now() - startedAt}ms`);
+        log('info', `[handler] cache-${cached.status} ${reqTag(parsed, languages)} -> ${cached.subtitles.length} subs in ${Date.now() - startedAt}ms`);
         if (cached.status === 'stale') {
-            scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
+            scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
         }
         fireTrack(parsedConfig, parsed, languages, cached.subtitles, Date.now() - startedAt, true);
         return { subtitles: applyStreamingServerWrap(cached.subtitles, userAgent) };
@@ -110,7 +108,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         metrics.recordCache('l2');
         l1.set(cacheKey, l2Hit.subtitles).catch(() => {});
         const returned = l1.materialize(l2Hit.subtitles, requestContext);
-        log('info', `[handler] l2-hit ${reqTag(parsed, wyzieLanguages)} -> ${l2Hit.subtitles.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
+        log('info', `[handler] l2-hit ${reqTag(parsed, languages)} -> ${l2Hit.subtitles.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
         fireTrack(parsedConfig, parsed, languages, returned, Date.now() - startedAt, true);
         return { subtitles: applyStreamingServerWrap(returned, userAgent) };
     }
@@ -121,7 +119,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         const waited = await inflight.pollFor(() => l1.get(cacheKey, requestContext));
         if (waited) {
             metrics.recordCache('l1');
-            log('info', `[handler] dedup-wait ${reqTag(parsed, wyzieLanguages)} -> ${waited.subtitles.length} subs in ${Date.now() - startedAt}ms`);
+            log('info', `[handler] dedup-wait ${reqTag(parsed, languages)} -> ${waited.subtitles.length} subs in ${Date.now() - startedAt}ms`);
             fireTrack(parsedConfig, parsed, languages, waited.subtitles, Date.now() - startedAt, true);
             return { subtitles: applyStreamingServerWrap(waited.subtitles, userAgent) };
         }
@@ -133,7 +131,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
             imdbId: parsed.imdbId,
             season: parsed.season,
             episode: parsed.episode,
-            languages: wyzieLanguages,
+            languages,
             filename,
             apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
             encryptedApiKeys: { subsource: encryptedApiKey }
@@ -152,7 +150,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         }
 
         const returned = l1.materialize(validated, requestContext);
-        log('info', `[handler] miss ${reqTag(parsed, wyzieLanguages)} -> ${validated.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
+        log('info', `[handler] miss ${reqTag(parsed, languages)} -> ${validated.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
         fireTrack(parsedConfig, parsed, languages, returned, Date.now() - startedAt, false, languageMatch);
         return { subtitles: applyStreamingServerWrap(returned, userAgent) };
     } finally {
@@ -226,7 +224,7 @@ function mergeFormatted(existing, extra) {
     return out;
 }
 
-function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey) {
+function scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey) {
     const subdlApiKey = parsedConfig.subdlApiKey || null;
     const wyzieApiKey = parsedConfig.wyzieApiKey || null;
     setImmediate(async () => {
@@ -237,7 +235,7 @@ function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filena
                 imdbId: parsed.imdbId,
                 season: parsed.season,
                 episode: parsed.episode,
-                languages: wyzieLanguages,
+                languages,
                 filename,
                 apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
                 encryptedApiKeys: { subsource: encryptedApiKey }
@@ -250,7 +248,7 @@ function scheduleRefresh(parsed, wyzieLanguages, languages, parsedConfig, filena
             await l1.set(cacheKey, validated);
             l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated)
                 .then((delta) => { if (delta) track.dist(delta); }).catch(() => {});
-            log('info', `[handler] stale-refresh ${reqTag(parsed, wyzieLanguages)} -> ${validated.length} subs`);
+            log('info', `[handler] stale-refresh ${reqTag(parsed, languages)} -> ${validated.length} subs`);
         } catch (err) {
             log('debug', `[handler] stale-refresh failed: ${err.message}`);
         } finally {
