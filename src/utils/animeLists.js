@@ -14,6 +14,15 @@ const LIST_URL = 'https://raw.githubusercontent.com/Fribb/anime-lists/master/ani
 const REFRESH_INTERVAL_MS = (parseInt(process.env.ANIME_LISTS_REFRESH_HOURS, 10) || 24) * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 30000;
 const MIN_EXPECTED_ENTRIES = 10000;
+const MIN_EXPECTED_IMDB_KEYS = 4000;
+const SPOT_CHECK_IMDB_ID = 'tt0388629';
+
+/** Upstream sends imdb_id as an array, as a comma-joined string, or as a bare string. */
+function imdbIdsOf(entry) {
+    const raw = entry.imdb_id;
+    const list = Array.isArray(raw) ? raw : (typeof raw === 'string' ? raw.split(',') : []);
+    return list.map(v => String(v).trim()).filter(v => v.startsWith('tt'));
+}
 
 let imdbIndex = null;
 let ready = false;
@@ -34,14 +43,21 @@ async function loadAnimeLists() {
 
         const index = new Map();
         for (const entry of list) {
-            if (!entry.imdb_id) continue;
-            if (!index.has(entry.imdb_id)) index.set(entry.imdb_id, []);
-            index.get(entry.imdb_id).push(entry);
+            for (const id of imdbIdsOf(entry)) {
+                if (!index.has(id)) index.set(id, []);
+                index.get(id).push(entry);
+            }
+        }
+
+        // An upstream shape change once emptied this index silently. Keep the previous one.
+        if (index.size < MIN_EXPECTED_IMDB_KEYS) {
+            throw new Error(`Unexpected IMDB mapping count: ${index.size}`);
         }
 
         imdbIndex = index;
         ready = true;
-        log('info', `[AnimeLists] Loaded ${list.length} entries, ${index.size} IMDB mappings`);
+        const spotCheck = index.has(SPOT_CHECK_IMDB_ID) ? 'ok' : 'FAILED';
+        log('info', `[AnimeLists] Loaded ${list.length} entries, ${index.size} IMDB mappings, spot check ${spotCheck}`);
     } catch (err) {
         log('error', `[AnimeLists] Failed to load: ${err.message}`);
     }
