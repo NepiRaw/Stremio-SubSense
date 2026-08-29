@@ -7,6 +7,7 @@
 
 const { cacheDb } = require('../infra/db');
 const { log } = require('../utils');
+const { sameLanguage } = require('../languages');
 
 const DAY_S = 24 * 60 * 60;
 
@@ -61,7 +62,7 @@ async function getByContent(imdbId, season, episode, languages) {
         });
         if (result.rows.length === 0) return null;
 
-        const langSet = new Set((languages || []).map(l => l.toLowerCase()));
+        const wanted = (languages || []).filter(Boolean);
         const seenIds = new Set();
         const merged = [];
         let minAge = Infinity;
@@ -76,7 +77,7 @@ async function getByContent(imdbId, season, episode, languages) {
 
             for (const sub of subs) {
                 if (!sub.id || seenIds.has(sub.id)) continue;
-                if (sub.lang && langSet.has(sub.lang.toLowerCase())) {
+                if (sub.lang && wanted.some(l => sameLanguage(l, sub.lang))) {
                     seenIds.add(sub.id);
                     merged.push(sub);
                 }

@@ -772,6 +772,20 @@ function mapStremioToWyzie(code) {
 }
 
 /**
+ * Does a subtitle's language satisfy a requested tag? Exact first, then the base
+ * language, so pt and pt-BR still serve each other when nothing better exists.
+ * Tolerates either side being alpha2, alpha3B or a regional tag.
+ */
+function sameLanguage(requested, subtitleLang) {
+    if (!requested || !subtitleLang) return false;
+    const a = (toCanonical(requested) || String(requested)).toLowerCase();
+    const b = (toCanonical(subtitleLang) || String(subtitleLang)).toLowerCase();
+    if (a === b) return true;
+    const baseA = mapStremioToWyzie(a);
+    return !!baseA && baseA === mapStremioToWyzie(b);
+}
+
+/**
  * Canonical internal form: the table's alpha2 tag, region included.
  */
 function toCanonical(code) {
@@ -862,6 +876,7 @@ module.exports = {
     
     // Conversion functions
     toCanonical,
+    sameLanguage,
     toAlpha3B,
     toAlpha2,
     toYifyCode,

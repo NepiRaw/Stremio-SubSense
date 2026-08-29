@@ -25,7 +25,7 @@ function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
     const wantedPairs = languages
         .map((stremio) => ({
             stremio,
-            tag: stremio.toLowerCase(),
+            tag: (toCanonical(stremio) || stremio).toLowerCase(),
             wyzie: (mapStremioToWyzie(stremio) || '').toLowerCase()
         }))
         .filter((p) => p.wyzie);
@@ -36,8 +36,9 @@ function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
     const exactMatches = new Set();
 
     for (const sub of subtitles) {
-        const subLang = (sub.lang || sub.language || '').toLowerCase();
-        const subBase = subLang.split('-')[0];
+        const raw = sub.lang || sub.language || '';
+        const subLang = (toCanonical(raw) || raw).toLowerCase();
+        const subBase = (mapStremioToWyzie(raw) || subLang.split('-')[0] || '').toLowerCase();
         const exact = wantedPairs.find((p) => p.tag === subLang);
         const matched = exact || wantedPairs.find((p) => p.wyzie === subBase);
         if (matched) {
