@@ -63,7 +63,7 @@ function waitForToken() {
 // Server block state (direct IP blocked by upstream)
 let serverBlocked = false;
 let serverBlockedAt = 0;
-const PROBE_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const PROBE_INTERVAL_MS = 5 * 60 * 1000; // retry the direct exit every 5 minutes
 
 // WARP rotation state
 let warpRotating = false;

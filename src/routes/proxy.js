@@ -11,8 +11,10 @@
  *   GET /api/subdl/proxy/*                 SubDL ZIP proxy (public, no API key)
  *   GET /api/betaseries/proxy/:subtitleId
  *
- * All proxy results are cached in a single bounded LRU keyed by
- * `${provider}:${id}:${variant}`. Conversion runs at most once per cache entry.
+ * Proxy results are cached in two tiers keyed by `${provider}:${id}:${variant}`: a bounded
+ * per-worker LRU, and a Redis tier shared by every worker that survives a restart. Without
+ * the shared tier each worker re-downloads what its siblings already hold, which is the
+ * volume that gets our exit IP throttled upstream. Conversion runs at most once per entry.
  */
 
 const express = require('express');
@@ -21,6 +23,7 @@ const cheerio = require('cheerio');
 const { log } = require('../../src/utils');
 const { warpFetch } = require('../utils/warpFetch');
 const { subdlFetch } = require('../utils/subdlFetch');
+const { redis, isHealthy, safe } = require('../infra/redis');
 const {
     extractSubtitleEntries,
     selectSubtitleEntry,
@@ -44,6 +47,10 @@ catch (_) { log('warn', '[proxy] crypto unavailable; SubSource downloads will be
 const PROXY_CACHE_MAX = parseInt(process.env.PROXY_CACHE_MAX, 10) || 5000;
 const PROXY_CACHE_MAX_BYTES = parseInt(process.env.PROXY_CACHE_MAX_BYTES, 10) || 256 * 1024 * 1024;
 const PROXY_CACHE_TTL_MS = (parseInt(process.env.PROXY_CACHE_TTL_HOURS, 10) || 24) * 60 * 60 * 1000;
+
+const PROXY_REDIS_PREFIX = 'ss:px:';
+const PROXY_REDIS_TTL_S = Math.floor(PROXY_CACHE_TTL_MS / 1000);
+const PROXY_REDIS_MAX_BYTES = parseInt(process.env.PROXY_REDIS_MAX_BYTES, 10) || 4 * 1024 * 1024;
 
 const proxyCache = new Map(); // key -> { content, contentType, headers, storedAt, bytes }
 const inflight = new Map();   // key -> Promise<entry>
@@ -89,6 +96,32 @@ function cacheSet(key, entry) {
     cacheBytes += bytes;
 }
 
+/** Bodies are stored as raw bytes in a hash, so nothing pays a base64 tax. */
+async function sharedGet(key) {
+    if (!isHealthy()) return null;
+    const raw = await safe(r => r.hgetallBuffer(PROXY_REDIS_PREFIX + key));
+    if (!raw || !raw.c) return null;
+    let headers = {};
+    if (raw.h) { try { headers = JSON.parse(raw.h.toString('utf8')); } catch (_) { /* drop unreadable headers */ } }
+    return { content: raw.c, contentType: raw.t ? raw.t.toString('utf8') : 'text/plain', headers };
+}
+
+function sharedSet(key, entry) {
+    if (!isHealthy()) return;
+    const body = Buffer.isBuffer(entry.content) ? entry.content : Buffer.from(String(entry.content));
+    if (body.length === 0 || body.length > PROXY_REDIS_MAX_BYTES) return;
+    const k = PROXY_REDIS_PREFIX + key;
+    safe(async r => {
+        await r.hset(k, 'c', body, 't', entry.contentType || 'text/plain',
+                     'h', JSON.stringify(entry.headers || {}));
+        await r.expire(k, PROXY_REDIS_TTL_S);
+    });
+}
+
+function getSharedCacheStats() {
+    return { enabled: isHealthy(), prefix: PROXY_REDIS_PREFIX, ttlSeconds: PROXY_REDIS_TTL_S };
+}
+
 function dedupe(key, fn) {
     if (inflight.has(key)) return inflight.get(key);
     const p = fn().finally(() => inflight.delete(key));
@@ -118,8 +151,16 @@ function resolveEntry(cacheKey, build) {
     return dedupe(cacheKey, async () => {
         const cached = cacheGet(cacheKey);
         if (cached) return { entry: cached, hit: true };
+
+        const shared = await sharedGet(cacheKey);
+        if (shared) {
+            cacheSet(cacheKey, shared);
+            return { entry: shared, hit: true };
+        }
+
         const fresh = await build();
         cacheSet(cacheKey, fresh);
+        sharedSet(cacheKey, fresh);
         return { entry: fresh, hit: false };
     });
 }
@@ -757,5 +798,5 @@ async function fetchGestdown(subtitleId, fmt = 'vtt') {
 }
 
 module.exports = router;
-module.exports._cache = { cacheGet, cacheSet, getProxyCacheStats, PROXY_CACHE_MAX_BYTES };
+module.exports._cache = { cacheGet, cacheSet, sharedGet, sharedSet, getProxyCacheStats, getSharedCacheStats, PROXY_CACHE_MAX_BYTES };
 module.exports.getProxyCacheStats = getProxyCacheStats;
