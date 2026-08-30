@@ -33,6 +33,7 @@
     "ioredis": "^6.0.0",
     "lzma-native": "^8.0.6",
     "node-unrar-js": "^2.0.2",
+    "parsium-media": "^1.1.0",
     "socks-proxy-agent": "^8.0.5",
     "stremio-addon-sdk": "^1.6.10",
     "subsrt-ts": "^2.1.2",

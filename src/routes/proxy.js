@@ -681,12 +681,12 @@ async function fetchAnimetosho(hexId, fmt = 'vtt') {
 // AnimeTosho XYZ subtitle proxy (storage.animetosho.xyz)
 // =====================================================
 
-const { decodeProxyToken, buildStorageUrl } = require('../utils/animetoshoXyzApi');
+const { decodeProxyToken, storageUrlForPath } = require('../utils/animetoshoXyzApi');
 
 /**
  * AnimeTosho XYZ subtitle proxy.
  * Downloads XZ-compressed subtitle from storage.animetosho.xyz, decompresses, converts.
- * The token encodes release ID, track number, language, extension, and torrent name.
+ * The token encodes the attachment id and the storage path the feed payload gave us.
  *
  * GET /api/animetosho-xyz/proxy/:token?fmt=vtt|ass|srt
  */
@@ -699,25 +699,23 @@ router.get('/animetosho-xyz/proxy/:token', async (req, res) => {
     }
 
     const decoded = decodeProxyToken(token);
-    if (!decoded || !decoded.r || decoded.t == null || !decoded.n) {
+    const url = decoded && storageUrlForPath(decoded.p);
+    if (!url || decoded.i == null) {
         return res.status(400).send('Invalid proxy token');
     }
 
-    const cacheKey = `animetosho-xyz:${decoded.r}:${decoded.t}:${fmt}`;
+    const cacheKey = `animetosho-xyz:${decoded.i}:${fmt}`;
 
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchAnimetoshoXyz(decoded, fmt));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchAnimetoshoXyz(url, fmt));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
-        log('error', `[proxy/animetosho-xyz] ${decoded.r}/track${decoded.t}: ${err.message}`);
+        log('error', `[proxy/animetosho-xyz] attachment ${decoded.i}: ${err.message}`);
         res.status(err.status || 500).send(`AnimeTosho XYZ proxy error: ${err.message}`);
     }
 });
 
-async function fetchAnimetoshoXyz(decoded, fmt = 'vtt') {
-    const track = { trackNum: decoded.t, language: decoded.l, ext: decoded.e };
-    const url = buildStorageUrl(decoded.r, decoded.n, track);
-
+async function fetchAnimetoshoXyz(url, fmt = 'vtt') {
     const response = await fetch(url, {
         headers: { 'User-Agent': 'SubSense-Stremio/2.0' },
         signal: AbortSignal.timeout(30000)
