@@ -16,7 +16,7 @@ async function getFilenameParser() {
 const API_BASE = 'https://api.subsource.net/api/v1';
 
 /**
- * SubSource requires a per-user API key. When no key is present the ResponseCache
+ * SubSource requires a per-user API key. When no key is present the L1 cache
  * stores a placeholder URL that is either rewritten with the requesting user's
  * key or stripped entirely at delivery time.
  */
