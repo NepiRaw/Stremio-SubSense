@@ -17,6 +17,7 @@ const { initWyzieSources } = require('./src/providers/WyzieProvider');
 const { init: initAnimeLists } = require('./src/utils/animeLists');
 const { initAnidbCache, isAnidbConfigured } = require('./src/utils/anidbApi');
 const { initDetailCache } = require('./src/utils/animetoshoApi');
+const { installWarpRotationHost } = require('./src/utils/warpRotation');
 
 const { registerDefaultProviders } = require('./src/providers');
 const routes = require('./src/routes');
@@ -159,6 +160,7 @@ function installShutdownHandlers(server) {
  */
 function runPrimary() {
     log('info', `[primary] starting ${WEB_CONCURRENCY} workers on pid ${process.pid}`);
+    installWarpRotationHost();
     for (let i = 0; i < WEB_CONCURRENCY; i++) cluster.fork();
 
     let shuttingDown = false;
