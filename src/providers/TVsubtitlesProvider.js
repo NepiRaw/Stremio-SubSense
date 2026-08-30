@@ -2,12 +2,14 @@
 
 const cheerio = require('cheerio');
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
-const { log } = require('../utils');
+const { log, capTo } = require('../utils');
 const { getByTvsubtitlesCode, toTvsubtitlesCode, getDisplayName, toAlpha2 } = require('../languages');
 
 const BASE_URL = 'http://www.tvsubtitles.net';
 const CINEMETA_URL = 'https://v3-cinemeta.strem.io/meta';
 const TIMEOUT = 15000;
+
+const SHOW_ID_CACHE_MAX = 5000;
 
 class TVsubtitlesProvider extends BaseProvider {
     constructor(options = {}) {
@@ -142,6 +144,7 @@ class TVsubtitlesProvider extends BaseProvider {
             }
 
             log('debug', `[TVsubtitlesProvider] Matched "${seriesName}" to "${bestMatch.showName}" (${(bestMatch.similarity * 100).toFixed(1)}%)`);
+            capTo(this._showIdCache, SHOW_ID_CACHE_MAX);
             this._showIdCache.set(seriesName, bestMatch.showId);
             return bestMatch.showId;
         } catch (error) {

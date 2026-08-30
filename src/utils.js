@@ -61,7 +61,17 @@ function parseStremioId(id) {
     };
 }
 
+/** Trim a Map or Set used as a long-lived cache so it cannot grow for the life of the process. */
+function capTo(store, max) {
+    while (store.size >= max) {
+        const oldest = store.keys().next().value;
+        if (oldest === undefined) break;
+        store.delete(oldest);
+    }
+}
+
 module.exports = {
     log,
-    parseStremioId
+    parseStremioId,
+    capTo
 };

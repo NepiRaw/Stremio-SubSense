@@ -1,12 +1,16 @@
 'use strict';
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
-const { log } = require('../utils');
+const { log, capTo } = require('../utils');
 const { toBetaseriesCode, getByBetaseriesCode, toAlpha3B, getDisplayName } = require('../languages');
 
 const API_BASE = 'https://api.betaseries.com';
 const API_VERSION = '3.0';
 const SUPPORTED = new Set(['fr', 'fre', 'en', 'eng']);
+
+// One episode lookup writes every episode of the show, so this grows with the catalogue.
+const SHOW_CACHE_MAX = 5000;
+const EPISODE_CACHE_MAX = 50000;
 
 class BetaSeriesProvider extends BaseProvider {
     constructor(options = {}) {
@@ -138,6 +142,7 @@ class BetaSeriesProvider extends BaseProvider {
         const result = await this._apiRequest('/shows/display', { imdb_id: imdbId });
         if (result && result.show) {
             const showId = result.show.id;
+            capTo(this._showCache, SHOW_CACHE_MAX);
             this._showCache.set(imdbId, showId);
             log('debug', `[BetaSeries] Found show: ${result.show.title} (ID: ${showId})`);
             return showId;
@@ -151,6 +156,7 @@ class BetaSeriesProvider extends BaseProvider {
         const result = await this._apiRequest('/shows/episodes', { id: showId });
         if (result && result.episodes) {
             for (const ep of result.episodes) {
+                capTo(this._episodeCache, EPISODE_CACHE_MAX);
                 this._episodeCache.set(`${showId}:${ep.season}:${ep.episode}`, ep.id);
             }
             return this._episodeCache.get(cacheKey) || null;

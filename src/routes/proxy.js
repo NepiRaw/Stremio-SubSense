@@ -83,6 +83,9 @@ function cacheGet(key) {
 }
 
 function cacheSet(key, entry) {
+    if (entry && typeof entry.content === 'string') {
+        entry = { ...entry, content: Buffer.from(entry.content, 'utf8') };
+    }
     const bytes = entryBytes(entry);
     if (bytes > PROXY_CACHE_MAX_BYTES) return;
 

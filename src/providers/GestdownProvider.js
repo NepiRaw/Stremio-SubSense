@@ -1,7 +1,7 @@
 'use strict';
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
-const { log } = require('../utils');
+const { log, capTo } = require('../utils');
 const { getByName, toGestdownName } = require('../languages');
 
 const GESTDOWN_BASE = 'https://api.gestdown.info';
@@ -19,6 +19,10 @@ const TIMEOUT = 12000;
  *   2. Look up show on Gestdown by TVDB ID
  *   3. Fetch subtitles for specific season/episode/language
  */
+const TVDB_CACHE_MAX = 10000;
+const SHOW_CACHE_MAX = 5000;
+const NEGATIVE_MAX = 10000;
+
 class GestdownProvider extends BaseProvider {
     constructor(options = {}) {
         super('gestdown', options);
@@ -177,19 +181,23 @@ class GestdownProvider extends BaseProvider {
             }
 
             if (!tvdbId) {
+                capTo(this._negativeTvdb, NEGATIVE_MAX);
                 this._negativeTvdb.add(imdbId);
                 return null;
             }
+            capTo(this._tvdbCache, TVDB_CACHE_MAX);
             this._tvdbCache.set(imdbId, tvdbId);
 
             const showId = await this._resolveGestdownShow(tvdbId);
             if (!showId) {
+                capTo(this._negativeTvdb, NEGATIVE_MAX);
                 this._negativeTvdb.add(imdbId);
                 return null;
             }
             return showId;
         } catch (err) {
             log('warn', `[GestdownProvider] ID resolution failed for ${imdbId}: ${err.message}`);
+            capTo(this._negativeTvdb, NEGATIVE_MAX);
             this._negativeTvdb.add(imdbId);
             return null;
         }
@@ -305,6 +313,7 @@ class GestdownProvider extends BaseProvider {
         const show = shows[0];
         if (!show || !show.id) return null;
 
+        capTo(this._showCache, SHOW_CACHE_MAX);
         this._showCache.set(tvdbId, { id: show.id, name: show.name });
         log('debug', `[GestdownProvider] TVDB ${tvdbId} → Gestdown show: ${show.name} (${show.id})`);
         return show.id;

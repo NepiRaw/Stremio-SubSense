@@ -1,7 +1,7 @@
 'use strict';
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
-const { log } = require('../utils');
+const { log, capTo } = require('../utils');
 const { toSubsourceCode, getBySubsourceCode, toAlpha3B, getDisplayName } = require('../languages');
 
 let filenameParseFn = null;
@@ -20,6 +20,8 @@ const API_BASE = 'https://api.subsource.net/api/v1';
  * stores a placeholder URL that is either rewritten with the requesting user's
  * key or stripped entirely at delivery time.
  */
+const MOVIE_CACHE_MAX = 10000;
+
 class SubSourceProvider extends BaseProvider {
     constructor(options = {}) {
         super('subsource', options);
@@ -148,11 +150,13 @@ class SubSourceProvider extends BaseProvider {
 
         if (result.data[0].type === 'movie') {
             const info = { movieId: result.data[0].movieId, type: 'movie' };
+            capTo(this._movieCache, MOVIE_CACHE_MAX);
             this._movieCache.set(cacheKey, info);
             return info;
         }
 
         for (const entry of result.data) {
+            capTo(this._movieCache, MOVIE_CACHE_MAX);
             this._movieCache.set(`${imdbId}:${entry.season}`, { movieId: entry.movieId, type: 'series', season: entry.season });
         }
         return this._movieCache.get(cacheKey) || null;
