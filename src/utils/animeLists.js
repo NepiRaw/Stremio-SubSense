@@ -24,6 +24,14 @@ function imdbIdsOf(entry) {
     return list.map(v => String(v).trim()).filter(v => v.startsWith('tt'));
 }
 
+/** Upstream sends episode_offset as a number or, like season, as a per-source object. */
+function episodeOffsetOf(entry) {
+    const raw = entry.episode_offset;
+    const value = raw && typeof raw === 'object' ? (raw.tvdb ?? raw.tmdb) : raw;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+}
+
 let imdbIndex = null;
 let ready = false;
 let refreshTimer = null;
@@ -88,7 +96,7 @@ function getAnidbIdForImdb(imdbId, season) {
         if (tvdbSeason === season) {
             return {
                 anidbId: entry.anidb_id,
-                episodeOffset: entry.episode_offset || 0,
+                episodeOffset: episodeOffsetOf(entry),
                 type: entry.type || 'TV'
             };
         }
@@ -97,7 +105,7 @@ function getAnidbIdForImdb(imdbId, season) {
     if (entries.length === 1 && season === 1) {
         return {
             anidbId: entries[0].anidb_id,
-            episodeOffset: entries[0].episode_offset || 0,
+            episodeOffset: episodeOffsetOf(entries[0]),
             type: entries[0].type || 'TV'
         };
     }

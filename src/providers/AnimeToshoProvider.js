@@ -144,7 +144,7 @@ class AnimeToshoProvider extends BaseProvider {
         }
 
         const episodeNum = query.episode - episodeOffset;
-        if (episodeNum < 1) {
+        if (!Number.isFinite(episodeNum) || episodeNum < 1) {
             log('warn', `[AnimeTosho] Episode ${query.episode} with offset ${episodeOffset} = ${episodeNum} (invalid)`);
             return [];
         }

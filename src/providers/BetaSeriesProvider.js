@@ -6,7 +6,7 @@ const { toBetaseriesCode, getByBetaseriesCode, toAlpha3B, getDisplayName } = req
 
 const API_BASE = 'https://api.betaseries.com';
 const API_VERSION = '3.0';
-const SUPPORTED = new Set(['fr', 'fre', 'en', 'eng']);
+const SUPPORTED = new Set(['fr', 'fre']);
 
 // One episode lookup writes every episode of the show, so this grows with the catalogue.
 const SHOW_CACHE_MAX = 5000;
@@ -42,7 +42,7 @@ class BetaSeriesProvider extends BaseProvider {
 
         const languages = Array.isArray(query.languages) && query.languages.length > 0
             ? query.languages.filter((l) => SUPPORTED.has(l.toLowerCase()))
-            : [null];
+            : ['fr'];
 
         if (languages.length === 0) return { subtitles: [] };
 
