@@ -96,6 +96,11 @@ function trackRequest(data) {
     const isMovie = type === 'movie' ? 1 : 0;
     const isSeries = type === 'series' ? 1 : 0;
 
+    if (_getMode() === 'minimal') {
+        if (userId) track.user(userId, { movie: isMovie, series: isSeries, languages });
+        return;
+    }
+
     track.counter('total_requests');
     if (isMovie) track.counter('total_movies');
     if (isSeries) track.counter('total_series');

@@ -39,13 +39,7 @@ function getLocalDateString() {
 }
 
 class StatsDBAsync {
-    /**
-     * @param {() => boolean} writesEnabled  - returns true when full writes are permitted
-     * @param {() => boolean} minimalEnabled - returns true when at least minimal tracking is on
-     */
-    constructor(writesEnabled, minimalEnabled) {
-        this._writesEnabled  = writesEnabled  || (() => true);
-        this._minimalEnabled = minimalEnabled || (() => true);
+    constructor() {
         this._lastSourceScanAt = 0;
     }
 

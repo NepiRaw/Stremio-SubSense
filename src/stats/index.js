@@ -3,9 +3,8 @@
 /**
  * Stats module entry point.
  *
- * There is one mode. The full/minimal split existed because full mode was expensive enough
- * to threaten the process; recording is now a buffered counter increment, so there is
- * nothing left to switch off. `STATS_ENABLED=false` still disables recording entirely.
+ * STATS_ENABLED is 3-valued. `minimal`: drops the per-user content log and the dashboard while
+ * keeping the /configure user counts and provider health.
  */
 
 const StatsDBAsync = require('./stats-db');
@@ -15,11 +14,21 @@ const contentLog = require('./content-log');
 const fold = require('./fold');
 const { log } = require('../../src/utils');
 
-const ENABLED = (process.env.STATS_ENABLED || '').toLowerCase() !== 'false';
+function resolveMode(raw) {
+    const value = String(raw || '').toLowerCase().trim();
+    if (value === 'false' || value === 'off') return 'disabled';
+    if (value === 'minimal') return 'minimal';
+    if (value && value !== 'true') {
+        log('warn', `[stats] unrecognised STATS_ENABLED="${raw}", using full`);
+    }
+    return 'full';
+}
 
-const statsDB = new StatsDBAsync(() => ENABLED, () => ENABLED);
+const MODE = resolveMode(process.env.STATS_ENABLED);
 
-statsService.init(statsDB, () => (ENABLED ? 'full' : 'disabled'));
+const statsDB = new StatsDBAsync();
+
+statsService.init(statsDB, () => MODE);
 
 /* ---------------------------------- */
 /*  Stats response cache              */
@@ -51,19 +60,20 @@ async function initStats() {
     if (_initDone) return;
     _initDone = true;
 
-    if (!ENABLED) {
-        log('info', '[stats] disabled by STATS_ENABLED=false');
+    if (MODE === 'disabled') {
+        log('info', '[stats] disabled by STATS_ENABLED');
         return;
     }
     track.start();
-    log('info', `[stats] recording enabled (flush every ${track.FLUSH_MS}ms)`);
+    log('info', `[stats] recording enabled, mode=${MODE} (flush every ${track.FLUSH_MS}ms)`);
 }
 
 async function flushWrites() {
     return track.flush();
 }
 
-function isStatsEnabled() { return ENABLED; }
+function isStatsEnabled() { return MODE !== 'disabled'; }
+function isFullStats() { return MODE === 'full'; }
 
 module.exports = {
     statsDB,
@@ -76,7 +86,6 @@ module.exports = {
     isStatsEnabled,
     getCachedStats,
     invalidateStatsCache,
-    // The page and its API are available to everyone whenever stats are on.
-    isFullStats: isStatsEnabled,
-    getStatsMode: () => (ENABLED ? 'full' : 'disabled')
+    isFullStats,
+    getStatsMode: () => MODE
 };

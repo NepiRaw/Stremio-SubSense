@@ -56,7 +56,7 @@ services:
       # - L1_STALE_AFTER_HOURS=2               # Served but refreshed in the background past this age
 
       # --- Stats (optional) ---
-      # - STATS_ENABLED=false                  # Switches off all recording, including /configure counts
+      # - STATS_ENABLED=minimal                # true | minimal | false
 
     # --- WARP requirements ---
     cap_add:
