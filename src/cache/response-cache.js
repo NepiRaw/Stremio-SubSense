@@ -3,9 +3,8 @@
 /**
  * L1 response cache on Redis, shared by every API worker.
  *
- * Entries are stored unmaterialized: quality-sorted, with `__SUBSRC_KEY__` placeholders in
- * SubSource URLs. Materialization is per-request because it depends on the caller's key,
- * filename and language cap.
+ * Entries are stored lean and unmaterialized: quality-sorted, without `id` or `label`, with
+ * `__SUBSRC_KEY__` placeholders in SubSource URLs
  */
 
 const { redis, isHealthy, safe } = require('../infra/redis');
@@ -48,16 +47,18 @@ function materialize(cachedSubtitles, ctx = {}) {
         maxPerLang = 0
     } = ctx;
 
+    const rendered = require('../utils/format').renderEntries(cachedSubtitles);
+
     let result;
     if (encryptedSubsourceKey) {
-        result = cachedSubtitles.map(sub => {
+        result = rendered.map(sub => {
             if (sub.url && sub.url.includes(SUBSRC_KEY_PLACEHOLDER)) {
                 return { ...sub, url: sub.url.replace(SUBSRC_KEY_PLACEHOLDER, encryptedSubsourceKey) };
             }
             return sub;
         });
     } else {
-        result = cachedSubtitles.filter(sub =>
+        result = rendered.filter(sub =>
             !(sub.url && sub.url.includes(SUBSRC_HOST_MARKER) && sub.url.includes(SUBSRC_KEY_PLACEHOLDER))
         );
     }

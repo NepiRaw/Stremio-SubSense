@@ -6,7 +6,7 @@ const l1 = require('../cache/response-cache');
 const l2 = require('../cache/subtitle-store');
 const inflight = require('../cache/inflight');
 const metrics = require('../infra/metrics');
-const { prioritizeByLanguage, formatForStremio } = require('../utils/format');
+const { prioritizeByLanguage, buildEntries } = require('../utils/format');
 const { validateWyzieUrls } = require('../utils/validateWyzie');
 const { statsService, track } = require('../stats');
 
@@ -182,7 +182,7 @@ function buildFormatted(rawSubtitles, languages, maxPerLang, opts = {}) {
     languageMatch.found = languages.filter(l => languageMatch.byLanguage[l]?.found);
     languageMatch.anyPreferredFound = languageMatch.found.length > 0;
     languageMatch.allPreferredFound = languageMatch.found.length === languages.length;
-    return { formatted: formatForStremio(subtitles, opts), languageMatch };
+    return { formatted: buildEntries(subtitles, opts), languageMatch };
 }
 
 function wireBackgroundPromises(promises, parsed, languages, parsedConfig, cacheKey, foregroundFormatted) {

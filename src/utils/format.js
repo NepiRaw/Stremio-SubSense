@@ -93,38 +93,36 @@ function toStremioLang(code) {
  * query so the proxy serves the right format for each emitted entry.
  */
 function formatForStremio(subtitles, opts = {}) {
+    return renderEntries(buildEntries(subtitles, opts));
+}
+
+/**
+ * The cache shape: what a served entry needs and cannot recompute. `id` and `label` are
+ * left to renderEntries. `url`, `lang` and `source` keep their names because the stats
+ * and cleanup readers of the stored blob read them directly.
+ */
+function buildEntries(subtitles, opts = {}) {
     const keepAss = !!opts.keepAss;
     const out = [];
-    let idx = 0;
 
     for (const sub of subtitles) {
         const subLang = sub.lang || sub.language || 'und';
         const lang = toStremioLang(subLang);
         const source = Array.isArray(sub.source) ? sub.source[0] : (sub.source || 'Unknown');
-        const isHI = !!(sub.hearingImpaired || sub.isHearingImpaired || sub.hi);
         const release = sub.releaseName || sub.release || sub.media || '';
-        let nameForLabel = sub.fileName || release || '';
-        if (sub.trackName) nameForLabel = nameForLabel ? `${nameForLabel} · ${sub.trackName}` : sub.trackName;
 
         const format = (sub.format || '').toLowerCase();
         const isAss = format === 'ass' || format === 'ssa' || sub.needsConversion === true;
         const sourceUrl = withSubsourcePlaceholder(sub.url);
 
-        const matchMeta = {};
-        if (sub.fileName) matchMeta.fileName = sub.fileName;
-        if (release) matchMeta.releaseName = release;
-        if (Array.isArray(sub.releases) && sub.releases.length > 0) matchMeta.releases = sub.releases;
+        const meta = {};
+        if (sub.fileName) meta.n = sub.fileName;
+        if (release) meta.r = release;
+        if (Array.isArray(sub.releases) && sub.releases.length > 0) meta.R = sub.releases;
+        if (sub.hearingImpaired || sub.isHearingImpaired || sub.hi) meta.h = 1;
+        if (sub.trackName) meta.t = sub.trackName;
 
-        const emit = (fmt, url) => {
-            out.push({
-                id: buildId(idx++, fmt, source, lang),
-                url,
-                lang,
-                label: buildLabel(source, fmt, nameForLabel, isHI),
-                source,
-                ...matchMeta
-            });
-        };
+        const emit = (fmt, url) => out.push({ url, lang, source, f: (fmt || 'srt').toLowerCase(), ...meta });
 
         if (isAss) {
             if (sub.needsConversion === false) {
@@ -147,6 +145,32 @@ function formatForStremio(subtitles, opts = {}) {
     const valid = out.filter((s) => !!s.url);
     log('debug', `[format] ${subtitles.length} provider subs -> ${valid.length} stremio entries${keepAss ? ' (keepAss)' : ''}`);
     return valid;
+}
+
+/**
+ * Rebuild the served entry. The id index is the array position, so a list merged from
+ * several cache rows cannot repeat an id. Entries cached before the lean shape carry
+ * their own label and are passed through.
+ */
+function renderEntries(entries) {
+    return entries.map((entry, idx) => {
+        if (entry.label !== undefined) {
+            return entry.id ? { ...entry, id: String(entry.id).replace(/-\d+$/, `-${idx}`) } : entry;
+        }
+        const base = entry.n || entry.r || '';
+        const name = entry.t ? (base ? `${base} · ${entry.t}` : entry.t) : base;
+        const out = {
+            id: buildId(idx, entry.f, entry.source, entry.lang),
+            url: entry.url,
+            lang: entry.lang,
+            label: buildLabel(entry.source, entry.f, name, !!entry.h),
+            source: entry.source
+        };
+        if (entry.n) out.fileName = entry.n;
+        if (entry.r) out.releaseName = entry.r;
+        if (entry.R) out.releases = entry.R;
+        return out;
+    });
 }
 
 // Provider-proxy paths that perform server-side extraction+conversion and
@@ -225,5 +249,7 @@ function scoreRating(sub) {
 module.exports = {
     prioritizeByLanguage,
     formatForStremio,
+    buildEntries,
+    renderEntries,
     PROXY_BASE_URL
 };

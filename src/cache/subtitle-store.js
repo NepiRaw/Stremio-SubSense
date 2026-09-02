@@ -47,8 +47,9 @@ async function get(imdbId, season, episode, languages) {
 }
 
 /**
- * Language-agnostic lookup: merge every non-expired row for this content, dedupe by id,
- * then keep only the requested languages.
+ * Language-agnostic lookup: merge every non-expired row for this content, dedupe by url,
+ * then keep only the requested languages. Ids are positional per row, so they cannot
+ * identify an entry across rows.
  */
 async function getByContent(imdbId, season, episode, languages) {
     try {
@@ -63,7 +64,7 @@ async function getByContent(imdbId, season, episode, languages) {
         if (result.rows.length === 0) return null;
 
         const wanted = (languages || []).filter(Boolean);
-        const seenIds = new Set();
+        const seenUrls = new Set();
         const merged = [];
         let minAge = Infinity;
 
@@ -76,9 +77,9 @@ async function getByContent(imdbId, season, episode, languages) {
             if (!Array.isArray(subs)) continue;
 
             for (const sub of subs) {
-                if (!sub.id || seenIds.has(sub.id)) continue;
+                if (!sub.url || seenUrls.has(sub.url)) continue;
                 if (sub.lang && wanted.some(l => sameLanguage(l, sub.lang))) {
-                    seenIds.add(sub.id);
+                    seenUrls.add(sub.url);
                     merged.push(sub);
                 }
             }
