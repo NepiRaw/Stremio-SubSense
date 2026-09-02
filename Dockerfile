@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:24-slim
 
 ARG TARGETARCH
 
@@ -8,7 +8,7 @@ WORKDIR /app
 RUN mkdir -p /app/data
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ bzip2 liblzma-dev curl gnupg dbus ca-certificates && \
+    curl gnupg dbus ca-certificates && \
     # Install Cloudflare WARP client
     curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ bookworm main" > /etc/apt/sources.list.d/cloudflare-client.list && \

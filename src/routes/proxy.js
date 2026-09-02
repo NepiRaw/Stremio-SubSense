@@ -597,9 +597,9 @@ async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' })
 // AnimeTosho subtitle proxy
 // =====================================================
 
-let lzma = null;
-try { lzma = require('lzma-native'); }
-catch (_) { log('warn', '[proxy] lzma-native unavailable; AnimeTosho downloads disabled'); }
+let xz = null;
+try { xz = require('@napi-rs/lzma').xz; }
+catch (_) { log('warn', '[proxy] @napi-rs/lzma unavailable; AnimeTosho downloads disabled'); }
 
 /**
  * AnimeTosho subtitle proxy.
@@ -616,7 +616,7 @@ router.get('/animetosho/proxy/:hexId', async (req, res) => {
         return res.status(400).send('Invalid attachment ID');
     }
 
-    if (!lzma) {
+    if (!xz) {
         return res.status(500).send('XZ decompression not available');
     }
 
@@ -647,13 +647,12 @@ async function fetchAnimetosho(hexId, fmt = 'vtt') {
 
     const compressed = Buffer.from(await response.arrayBuffer());
 
-    // Decompress XZ using lzma-native
-    const decompressed = await new Promise((resolve, reject) => {
-        lzma.decompress(compressed, (result, error) => {
-            if (error) reject(new Error(`XZ decompression failed: ${error}`));
-            else resolve(result);
-        });
-    });
+    let decompressed;
+    try {
+        decompressed = await xz.decompress(compressed);
+    } catch (e) {
+        throw new Error(`XZ decompression failed: ${e.message}`);
+    }
 
     const text = decompressed.toString('utf8');
 
@@ -694,7 +693,7 @@ router.get('/animetosho-xyz/proxy/:token', async (req, res) => {
     const { token } = req.params;
     const fmt = pickFmt(req);
 
-    if (!lzma) {
+    if (!xz) {
         return res.status(500).send('XZ decompression not available');
     }
 
@@ -729,12 +728,12 @@ async function fetchAnimetoshoXyz(url, fmt = 'vtt') {
 
     const compressed = Buffer.from(await response.arrayBuffer());
 
-    const decompressed = await new Promise((resolve, reject) => {
-        lzma.decompress(compressed, (result, error) => {
-            if (error) reject(new Error(`XZ decompression failed: ${error}`));
-            else resolve(result);
-        });
-    });
+    let decompressed;
+    try {
+        decompressed = await xz.decompress(compressed);
+    } catch (e) {
+        throw new Error(`XZ decompression failed: ${e.message}`);
+    }
 
     const text = decompressed.toString('utf8');
 
