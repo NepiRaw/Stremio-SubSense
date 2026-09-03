@@ -5,6 +5,7 @@ const { log, capTo } = require('../utils');
 const { toSubsourceCode, getBySubsourceCode, toAlpha3B, getDisplayName } = require('../languages');
 
 const { adaptForMatcher } = require('../utils/mediaParser');
+const { declaredTrack } = require('../utils/trackType');
 
 const API_BASE = 'https://api.subsource.net/api/v1';
 
@@ -225,11 +226,15 @@ class SubSourceProvider extends BaseProvider {
             ? sub.releaseInfo.join(' | ')
             : (sub.releaseInfo || '');
 
+        // A pack holds several tracks per episode; `track` tells the proxy which one this line is.
+        const track = declaredTrack(releaseInfo, !!sub.hearingImpaired);
+
         const params = new URLSearchParams();
         if (query.encryptedApiKey) params.set('key', query.encryptedApiKey);
         if (query.season) params.set('season', query.season.toString());
         if (query.episode) params.set('episode', query.episode.toString());
         if (query.filename) params.set('filename', query.filename);
+        if (track !== 'plain') params.set('track', track);
 
         const sanitizedRelease = releaseInfo
             ? releaseInfo.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').substring(0, 100)

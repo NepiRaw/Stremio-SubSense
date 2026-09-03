@@ -4,6 +4,7 @@ const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log } = require('../utils');
 const { toSubdlCode, getBySubdlCode, toAlpha3B, getDisplayName } = require('../languages');
 const mediaParser = require('../utils/mediaParser');
+const { declaredTrack } = require('../utils/trackType');
 
 const API_BASE = 'https://api.subdl.com/api/v1';
 
@@ -253,11 +254,16 @@ class SubDLProvider extends BaseProvider {
         const { season, episode, filename } = opts;
 
         // Build proxy URL (SubDL downloads are public, no API key needed)
+        const releaseName = sub.release_name || sub.name || '';
+        // A pack holds several tracks per episode; `track` tells the proxy which one this line is.
+        const track = declaredTrack(releaseName, !!sub.hi);
+
         const encodedUrl = encodeURIComponent((sub.url || '').replace(/^\/+/, ''));
         const params = new URLSearchParams();
         if (season != null) params.set('season', String(season));
         if (episode != null) params.set('episode', String(episode));
         if (filename) params.set('filename', filename);
+        if (track !== 'plain') params.set('track', track);
         const queryStr = params.toString();
         const downloadUrl = `${this.baseUrl}/api/subdl/proxy/${encodedUrl}${queryStr ? '?' + queryStr : ''}`;
 
@@ -265,7 +271,6 @@ class SubDLProvider extends BaseProvider {
         const stremioCode = lang ? toAlpha3B(lang.alpha2) : 'und';
         const displayName = lang ? getDisplayName(lang.alpha2) : (sub.language || 'Unknown');
 
-        const releaseName = sub.release_name || sub.name || '';
         const releases = Array.isArray(sub.releases) ? sub.releases : [];
 
         return new SubtitleResult({

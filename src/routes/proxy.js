@@ -334,10 +334,10 @@ async function fetchTvsubs(subtitleId, episodeUrl, fmt = 'vtt') {
 
 router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     const { subtitleId } = req.params;
-    const { key, season, episode, filename } = req.query;
+    const { key, season, episode, filename, track } = req.query;
     const fmt = pickFmt(req);
     const fileHint = (typeof filename === 'string' && filename.trim()) ? filename.trim().toLowerCase() : 'nofilename';
-    const cacheKey = `subsource:${subtitleId}:${season || 'all'}:${episode || 'all'}:${fileHint}:${fmt}`;
+    const cacheKey = `subsource:${subtitleId}:${season || 'all'}:${episode || 'all'}:${fileHint}:${track || 'plain'}:${fmt}`;
 
     if (!key) return res.status(401).send('SubSource API key required');
     if (!decryptConfig) return res.status(500).send('Encryption not configured');
@@ -351,7 +351,7 @@ router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     }
 
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchSubsource(subtitleId, apiKey, { season, episode, filename, fmt }));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchSubsource(subtitleId, apiKey, { season, episode, filename, track, fmt }));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/subsource] ${err.message}`);
@@ -359,7 +359,7 @@ router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     }
 });
 
-async function fetchSubsource(subtitleId, apiKey, { season, episode, filename, fmt = 'vtt' }) {
+async function fetchSubsource(subtitleId, apiKey, { season, episode, filename, track, fmt = 'vtt' }) {
     const url = `https://api.subsource.net/api/v1/subtitles/${subtitleId}/download`;
     const dlRes = await fetch(url, {
         headers: {
@@ -381,7 +381,7 @@ async function fetchSubsource(subtitleId, apiKey, { season, episode, filename, f
         throw err;
     }
 
-    const selected = selectSubtitleEntry(entries, { season, episode, filename });
+    const selected = selectSubtitleEntry(entries, { season, episode, filename, track });
     if (!selected) {
         const err = new Error(`Episode ${episode} not found in this pack`);
         err.status = 404;
@@ -527,15 +527,15 @@ router.get('/subdl/proxy/*', async (req, res) => {
     subdlPath = decodeURIComponent(subdlPath).replace(/^\/+/, '');
     if (!subdlPath) return res.status(400).send('Missing subtitle path');
 
-    const { season, episode, filename } = req.query;
+    const { season, episode, filename, track } = req.query;
     const fmt = pickFmt(req);
     const fileHint = (typeof filename === 'string' && filename.trim())
         ? filename.trim().toLowerCase() : 'nofilename';
-    const cacheKey = `subdl:${subdlPath}:${season || 'all'}:${episode || 'all'}:${fileHint}:${fmt}`;
+    const cacheKey = `subdl:${subdlPath}:${season || 'all'}:${episode || 'all'}:${fileHint}:${track || 'plain'}:${fmt}`;
 
     try {
         const { entry, hit } = await resolveEntry(cacheKey,
-            () => fetchSubdl(subdlPath, { season, episode, filename, fmt }));
+            () => fetchSubdl(subdlPath, { season, episode, filename, track, fmt }));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/subdl] ${err.message}`);
@@ -543,7 +543,7 @@ router.get('/subdl/proxy/*', async (req, res) => {
     }
 });
 
-async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' }) {
+async function fetchSubdl(subdlPath, { season, episode, filename, track, fmt = 'vtt' }) {
     const downloadUrl = `https://dl.subdl.com/${subdlPath}`;
     const dlRes = await subdlFetch(downloadUrl, {
         headers: { 'User-Agent': 'SubSense/2.0' }
@@ -570,7 +570,7 @@ async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' })
         };
     }
 
-    const selected = selectSubtitleEntry(entries, { season, episode, filename });
+    const selected = selectSubtitleEntry(entries, { season, episode, filename, track });
     if (!selected) {
         const err = new Error('No matching subtitle in SubDL archive');
         err.status = 404;

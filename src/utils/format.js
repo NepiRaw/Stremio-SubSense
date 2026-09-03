@@ -4,6 +4,7 @@ const { mapStremioToWyzie, mapWyzieToStremio, toCanonical } = require('../../src
 const { log } = require('../../src/utils');
 const { SUBSRC_KEY_PLACEHOLDER } = require('../cache/response-cache');
 const { getSourceDisplayName } = require('../providers/WyzieProvider');
+const { declaredTrack } = require('./trackType');
 
 const PROXY_BASE_URL = process.env.SUBSENSE_BASE_URL ||
     `http://127.0.0.1:${process.env.PORT || 3100}`;
@@ -115,11 +116,15 @@ function buildEntries(subtitles, opts = {}) {
         const isAss = format === 'ass' || format === 'ssa' || sub.needsConversion === true;
         const sourceUrl = withSubsourcePlaceholder(sub.url);
 
+        const declared = declaredTrack(sub.fileName || release || '',
+            sub.hearingImpaired || sub.isHearingImpaired || sub.hi);
+
         const meta = {};
         if (sub.fileName) meta.n = sub.fileName;
         if (release) meta.r = release;
         if (Array.isArray(sub.releases) && sub.releases.length > 0) meta.R = sub.releases;
-        if (sub.hearingImpaired || sub.isHearingImpaired || sub.hi) meta.h = 1;
+        if (declared === 'hi') meta.h = 1;
+        if (declared === 'forced') meta.x = 1;
         if (sub.trackName) meta.t = sub.trackName;
 
         const emit = (fmt, url) => out.push({ url, lang, source, f: (fmt || 'srt').toLowerCase(), ...meta });
@@ -163,7 +168,7 @@ function renderEntries(entries) {
             id: buildId(idx, entry.f, entry.source, entry.lang),
             url: entry.url,
             lang: entry.lang,
-            label: buildLabel(entry.source, entry.f, name, !!entry.h),
+            label: buildLabel(entry.source, entry.f, name, !!entry.h, !!entry.x),
             source: entry.source
         };
         if (entry.n) out.fileName = entry.n;
@@ -177,12 +182,13 @@ function renderEntries(entries) {
 // honor a `?fmt=ass|vtt` hint so we can request the original ASS bytes.
 const PROVIDER_PROXY_RE = /\/api\/(yify|tvsubtitles|subsource|betaseries|opensubtitles|gestdown|animetosho|animetosho-xyz|subdl)\/proxy\//;
 
-// Build the user-facing label: "Provider · [FORMAT] · <name> · [HI]"
-function buildLabel(provider, fmt, name, isHI) {
+// Build the user-facing label: "Provider · [FORMAT] · <name> · [HI|FORCED]"
+function buildLabel(provider, fmt, name, isHI, isForced) {
     const parts = [displayProvider(provider), `[${(fmt || 'srt').toUpperCase()}]`];
     if (name) parts.push(name);
     let label = parts.join(' · ');
-    if (isHI) label += ' · HI';
+    if (isForced) label += ' · FORCED';
+    else if (isHI) label += ' · HI';
     return label;
 }
 
