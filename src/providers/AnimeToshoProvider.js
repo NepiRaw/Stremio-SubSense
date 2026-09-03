@@ -17,7 +17,7 @@ const { getAnidbIdForImdb, getAnimeListReady, isAnime } = require('../utils/anim
 const { getEpisodeId, isAnidbConfigured } = require('../utils/anidbApi');
 const { searchByEpisodeId, searchByAnidbId, getTorrentDetail, buildProxyUrl } = require('../utils/animetoshoApi');
 const xyzApi = require('../utils/animetoshoXyzApi');
-const { scoreReleaseSeason } = require('../utils/mediaParser');
+const { scoreReleaseSeason, parse: parseMedia } = require('../utils/mediaParser');
 const { getByAlpha3B, getDisplayName, toAlpha3B } = require('../languages');
 
 const SEARCH_THRESHOLD = parseInt(process.env.ANIMETOSHO_SEARCH_THRESHOLD, 10) || 2;
@@ -25,15 +25,6 @@ const XYZ_SEARCH_THRESHOLD = parseInt(process.env.ANIMETOSHO_XYZ_SEARCH_THRESHOL
 const XYZ_MAX_OFFSET = parseInt(process.env.ANIMETOSHO_XYZ_MAX_OFFSET, 10) || 4000;
 const XYZ_BACKGROUND_DETAILS = 12;
 const XYZ_PAGE_DELAY_MS = 800;
-
-let filenameParse = null;
-async function getParser() {
-    if (!filenameParse) {
-        const module = await import('@ctrl/video-filename-parser');
-        filenameParse = module.filenameParse;
-    }
-    return filenameParse;
-}
 
 class AnimeToshoProvider extends BaseProvider {
     constructor(options = {}) {
@@ -234,20 +225,18 @@ class AnimeToshoProvider extends BaseProvider {
 
     /**
      * Filter entries from ?aids= response by episode number using title parsing.
-     * Uses @ctrl/video-filename-parser + fallback regex for anime-style titles.
+     * Uses the shared parser, then a regex fallback for anime-style titles.
      */
     async _filterEntriesByEpisode(entries, season, episodeNum) {
-        const parse = await getParser();
         const matched = [];
 
         for (const entry of entries) {
             if (!entry.title) continue;
 
-            // Parse title with video-filename-parser
             try {
-                const parsed = parse(entry.title, true);
-                if (parsed && parsed.episodeNumbers && parsed.episodeNumbers.length > 0) {
-                    if (parsed.episodeNumbers.includes(episodeNum)) {
+                const parsed = parseMedia(entry.title);
+                if (parsed && parsed.episodes && parsed.episodes.length > 0) {
+                    if (parsed.episodes.includes(episodeNum)) {
                         matched.push(entry);
                         continue;
                     }

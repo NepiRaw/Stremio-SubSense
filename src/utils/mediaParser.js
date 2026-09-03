@@ -60,4 +60,21 @@ function scoreReleaseSeason(title, wantedSeason) {
     return seasons.has(wantedSeason) ? 2 : 0;
 }
 
-module.exports = { parse, tokenSeasons, seasonsOf, scoreReleaseSeason };
+/**
+ * A parsed name under the field names the filename matcher scores on. `source` is one string
+ * here and a list there, so it is wrapped rather than dropped.
+ */
+function adaptForMatcher(name) {
+    const p = parse(name);
+    return {
+        title: p.title || null,
+        seasons: p.seasons || [],
+        episodeNumbers: p.episodes || [],
+        group: p.releaseGroup || null,
+        sources: p.source ? [p.source] : [],
+        videoCodec: p.codec || null,
+        resolution: p.resolution || null
+    };
+}
+
+module.exports = { parse, adaptForMatcher, tokenSeasons, seasonsOf, scoreReleaseSeason };

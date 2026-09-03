@@ -3,7 +3,7 @@
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log } = require('../utils');
 const { toSubdlCode, getBySubdlCode, toAlpha3B, getDisplayName } = require('../languages');
-const { guessit } = require('guessit-js');
+const mediaParser = require('../utils/mediaParser');
 
 const API_BASE = 'https://api.subdl.com/api/v1';
 
@@ -225,14 +225,13 @@ class SubDLProvider extends BaseProvider {
         if (!releaseName) return true;
 
         try {
-            const parsed = guessit(releaseName);
+            const parsed = mediaParser.parse(releaseName);
 
-            if (parsed.type === 'movie') return false;
+            if (parsed.contentType === 'movie') return false;
 
-            const parsedSeason = parsed.season || null;
-            const parsedEpisodes = parsed.episode != null
-                ? (Array.isArray(parsed.episode) ? parsed.episode : [parsed.episode])
-                : [];
+            const parsedSeasons = parsed.seasons || [];
+            const parsedSeason = parsedSeasons.length === 1 ? parsedSeasons[0] : null;
+            const parsedEpisodes = parsed.episodes || [];
 
             if (parsedEpisodes.length === 0) {
                 if (parsedSeason == null || parsedSeason === season) return true;

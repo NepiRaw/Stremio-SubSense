@@ -4,14 +4,7 @@ const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log, capTo } = require('../utils');
 const { toSubsourceCode, getBySubsourceCode, toAlpha3B, getDisplayName } = require('../languages');
 
-let filenameParseFn = null;
-async function getFilenameParser() {
-    if (!filenameParseFn) {
-        const { filenameParse } = await import('@ctrl/video-filename-parser');
-        filenameParseFn = filenameParse;
-    }
-    return filenameParseFn;
-}
+const { adaptForMatcher } = require('../utils/mediaParser');
 
 const API_BASE = 'https://api.subsource.net/api/v1';
 
@@ -174,8 +167,7 @@ class SubSourceProvider extends BaseProvider {
         const requestedSeason = parseInt(query.season, 10);
 
         try {
-            const parse = await getFilenameParser();
-            const parsed = parse(releaseInfo, true);
+            const parsed = adaptForMatcher(releaseInfo);
             if (parsed.episodeNumbers && parsed.episodeNumbers.length > 0) {
                 if (!parsed.episodeNumbers.includes(requestedEpisode)) return false;
                 if (parsed.seasons && parsed.seasons.length > 0 && !parsed.seasons.includes(requestedSeason)) return false;
