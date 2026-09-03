@@ -199,7 +199,7 @@ Access your addon at `http://localhost:3100`
 | `L2_TTL_DAYS` | Optional | `7` | Subtitle cache retention |
 | `PROVIDER_DEADLINE_MS` | Optional | `8000` | Soft provider fan-out deadline. See the note below |
 | `PROXY_CACHE_MAX_BYTES` | Optional | `268435456` | Byte cap on the in-memory subtitle body cache |
-| `STATS_ENABLED` | Optional | `true` | Set to `false` to switch off all statistics recording |
+| `STATS_ENABLED` | Optional | `true` | `true`, `minimal` or `false`. See the note below |
 
 > `PROVIDER_DEADLINE_MS` is roughly how long a Stremio client waits before treating a subtitle request as failed. It is a product constraint rather than a performance knob: lowering it returns fewer subtitles for results that would have arrived in time.
 
@@ -322,7 +322,7 @@ Daily rows migrated from v2 carry `0` for columns v2 never had (`subtitles`, `an
 
 | Removed | Replacement |
 |---------|-------------|
-| `STATS_REFRESH_INTERVAL` | `STATS_ENABLED=false`. There is one stats mode now, and `/stats` is available to everyone |
+| `STATS_REFRESH_INTERVAL` | `STATS_ENABLED=minimal` or `false`. It throttled a cost that no longer exists |
 | `DB_PATH` | `CACHE_DB_PATH`, `STATS_DB_PATH`, `META_DB_PATH` |
 | `CACHE_RETENTION_DAYS` | `L2_TTL_DAYS`. The old name was documented but never read by any code |
 | `CACHE_REFRESH_INTERVAL` | `L1_STALE_AFTER_HOURS` |

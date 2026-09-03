@@ -12,11 +12,11 @@ const os = require('os');
 const express = require('express');
 
 const { log } = require('./src/utils');
-const { preloadParser } = require('./src/utils/filenameMatcher');
 const { initWyzieSources } = require('./src/providers/WyzieProvider');
 const { init: initAnimeLists } = require('./src/utils/animeLists');
 const { initAnidbCache, isAnidbConfigured } = require('./src/utils/anidbApi');
 const { initDetailCache } = require('./src/utils/animetoshoApi');
+const { installWarpRotationHost } = require('./src/utils/warpRotation');
 
 const { registerDefaultProviders } = require('./src/providers');
 const routes = require('./src/routes');
@@ -77,8 +77,7 @@ async function bootstrap() {
     const initTasks = [
         initWyzieSources().catch((err) => log('warn', `[server] Wyzie init failed: ${err.message}`)),
         wyzieProvider ? wyzieProvider.initialize().catch((err) => log('warn', `[server] Wyzie key pool init failed: ${err.message}`)) : Promise.resolve(),
-        initAnimeLists().catch((err) => log('warn', `[server] AnimeLists init failed: ${err.message}`)),
-        preloadParser().catch((err) => log('warn', `[server] parser preload failed: ${err.message}`))
+        initAnimeLists().catch((err) => log('warn', `[server] AnimeLists init failed: ${err.message}`))
     ];
 
     if (isAnidbConfigured()) {
@@ -159,6 +158,7 @@ function installShutdownHandlers(server) {
  */
 function runPrimary() {
     log('info', `[primary] starting ${WEB_CONCURRENCY} workers on pid ${process.pid}`);
+    installWarpRotationHost();
     for (let i = 0; i < WEB_CONCURRENCY; i++) cluster.fork();
 
     let shuttingDown = false;

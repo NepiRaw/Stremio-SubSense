@@ -1,25 +1,21 @@
 'use strict';
 
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
-const { log } = require('../utils');
+const { log, capTo } = require('../utils');
 const { toSubsourceCode, getBySubsourceCode, toAlpha3B, getDisplayName } = require('../languages');
 
-let filenameParseFn = null;
-async function getFilenameParser() {
-    if (!filenameParseFn) {
-        const { filenameParse } = await import('@ctrl/video-filename-parser');
-        filenameParseFn = filenameParse;
-    }
-    return filenameParseFn;
-}
+const { adaptForMatcher } = require('../utils/mediaParser');
+const { declaredTrack } = require('../utils/trackType');
 
 const API_BASE = 'https://api.subsource.net/api/v1';
 
 /**
- * SubSource requires a per-user API key. When no key is present the ResponseCache
+ * SubSource requires a per-user API key. When no key is present the L1 cache
  * stores a placeholder URL that is either rewritten with the requesting user's
  * key or stripped entirely at delivery time.
  */
+const MOVIE_CACHE_MAX = 10000;
+
 class SubSourceProvider extends BaseProvider {
     constructor(options = {}) {
         super('subsource', options);
@@ -148,11 +144,13 @@ class SubSourceProvider extends BaseProvider {
 
         if (result.data[0].type === 'movie') {
             const info = { movieId: result.data[0].movieId, type: 'movie' };
+            capTo(this._movieCache, MOVIE_CACHE_MAX);
             this._movieCache.set(cacheKey, info);
             return info;
         }
 
         for (const entry of result.data) {
+            capTo(this._movieCache, MOVIE_CACHE_MAX);
             this._movieCache.set(`${imdbId}:${entry.season}`, { movieId: entry.movieId, type: 'series', season: entry.season });
         }
         return this._movieCache.get(cacheKey) || null;
@@ -170,8 +168,7 @@ class SubSourceProvider extends BaseProvider {
         const requestedSeason = parseInt(query.season, 10);
 
         try {
-            const parse = await getFilenameParser();
-            const parsed = parse(releaseInfo, true);
+            const parsed = adaptForMatcher(releaseInfo);
             if (parsed.episodeNumbers && parsed.episodeNumbers.length > 0) {
                 if (!parsed.episodeNumbers.includes(requestedEpisode)) return false;
                 if (parsed.seasons && parsed.seasons.length > 0 && !parsed.seasons.includes(requestedSeason)) return false;
@@ -229,11 +226,15 @@ class SubSourceProvider extends BaseProvider {
             ? sub.releaseInfo.join(' | ')
             : (sub.releaseInfo || '');
 
+        // A pack holds several tracks per episode; `track` tells the proxy which one this line is.
+        const track = declaredTrack(releaseInfo, !!sub.hearingImpaired);
+
         const params = new URLSearchParams();
         if (query.encryptedApiKey) params.set('key', query.encryptedApiKey);
         if (query.season) params.set('season', query.season.toString());
         if (query.episode) params.set('episode', query.episode.toString());
         if (query.filename) params.set('filename', query.filename);
+        if (track !== 'plain') params.set('track', track);
 
         const sanitizedRelease = releaseInfo
             ? releaseInfo.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').substring(0, 100)

@@ -1,8 +1,8 @@
 'use strict';
 
-const { execSync } = require('child_process');
 const { log } = require('../utils');
 const { forceWarpFetch, isWarpAvailable } = require('./warpFetch');
+const { requestWarpRotation } = require('./warpRotation');
 
 // Rate limiter: serial queue with token bucket + minimum spacing
 const MAX_TOKENS = 5;
@@ -63,67 +63,13 @@ function waitForToken() {
 // Server block state (direct IP blocked by upstream)
 let serverBlocked = false;
 let serverBlockedAt = 0;
-const PROBE_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-// WARP rotation state
-let warpRotating = false;
-let lastWarpRotation = 0;
-let currentWarpIp = null;
-const WARP_ROTATION_COOLDOWN_MS = 30000; // 30s cooldown between rotations
-const MAX_ROTATION_ATTEMPTS = 3;
-const WARP_PROXY_URL = process.env.WARP_PROXY_URL || 'socks5h://127.0.0.1:40000';
-
-async function getWarpExitIp() {
-    try {
-        const res = execSync(
-            `curl -s --max-time 5 --socks5-hostname ${WARP_PROXY_URL.replace('socks5h://', '')} https://ifconfig.me`,
-            { timeout: 8000, stdio: 'pipe' }
-        );
-        return res.toString().trim();
-    } catch (_) {
-        return null;
-    }
-}
-
-async function rotateWarpIp() {
-    const now = Date.now();
-    if (warpRotating || (now - lastWarpRotation < WARP_ROTATION_COOLDOWN_MS)) return false;
-    warpRotating = true;
-    try {
-        const oldIp = currentWarpIp || await getWarpExitIp();
-
-        for (let attempt = 1; attempt <= MAX_ROTATION_ATTEMPTS; attempt++) {
-            execSync('warp-cli --accept-tos disconnect', { timeout: 5000, stdio: 'pipe' });
-            execSync('sleep 2', { timeout: 5000, stdio: 'pipe' });
-            execSync('warp-cli --accept-tos connect', { timeout: 5000, stdio: 'pipe' });
-            execSync('sleep 3', { timeout: 5000, stdio: 'pipe' });
-
-            const newIp = await getWarpExitIp();
-            if (newIp && newIp !== oldIp) {
-                currentWarpIp = newIp;
-                lastWarpRotation = Date.now();
-                log('info', `[subdlFetch] WARP IP rotated: ${oldIp} -> ${newIp} (attempt ${attempt})`);
-                return true;
-            }
-            log('warn', `[subdlFetch] WARP IP unchanged after attempt ${attempt} (${newIp})`);
-        }
-
-        log('warn', `[subdlFetch] WARP IP rotation failed after ${MAX_ROTATION_ATTEMPTS} attempts`);
-        lastWarpRotation = Date.now();
-        return false;
-    } catch (e) {
-        log('warn', `[subdlFetch] WARP rotation error: ${e.message}`);
-        return false;
-    } finally {
-        warpRotating = false;
-    }
-}
+const PROBE_INTERVAL_MS = 5 * 60 * 1000; // retry the direct exit every 5 minutes
 
 /**
  * Fetch from dl.subdl.com with tiered strategy:
  * 1. Direct (rate-limited) unless server is blocked
  * 2. WARP fallback on 429
- * 3. WARP IP rotation if WARP also returns 429
+ * 3. WARP IP rotation if WARP also returns 429, owned by the cluster primary
  * 4. Periodic server probe to detect unblocking
  */
 async function subdlFetch(url, options = {}) {
@@ -160,8 +106,8 @@ async function subdlFetch(url, options = {}) {
 
     if (warpRes.status === 429) {
         // Tier 3: Rotate WARP IP and let next request benefit
-        log('warn', '[subdlFetch] WARP also got 429, attempting IP rotation');
-        await rotateWarpIp();
+        log('warn', '[subdlFetch] WARP also got 429, requesting IP rotation');
+        await requestWarpRotation();
     }
 
     return warpRes;

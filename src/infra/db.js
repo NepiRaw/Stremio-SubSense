@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS stats_daily (
     subtitles       INTEGER DEFAULT 0,
     any_pref_found  INTEGER DEFAULT 0,
     all_pref_found  INTEGER DEFAULT 0,
+    pref_tracked    INTEGER DEFAULT 0,
     unique_users    INTEGER DEFAULT 0
 );
 
@@ -284,6 +285,26 @@ async function kvSet(key, value) {
 let initialized = false;
 let initPromise = null;
 
+/**
+ * `CREATE TABLE IF NOT EXISTS` leaves an existing file untouched, so a new column needs an explicit ALTER.
+ */
+const ADDED_COLUMNS = [
+    ['stats_daily', 'pref_tracked', 'INTEGER DEFAULT 0']
+];
+
+async function addMissingColumns() {
+    for (const [table, column, type] of ADDED_COLUMNS) {
+        try {
+            const cols = await clients.stats.execute(`PRAGMA table_info('${table}')`);
+            if (cols.rows.some(c => c.name === column)) continue;
+            await clients.stats.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+            log('info', `[DB:stats] added ${table}.${column}`);
+        } catch (err) {
+            log('error', `[DB:stats] could not add ${table}.${column}: ${err.message}`);
+        }
+    }
+}
+
 async function initAll() {
     if (initialized) return clients;
     if (initPromise) return initPromise;
@@ -304,6 +325,8 @@ async function initAll() {
             }
             log('info', `[DB:${name}] ready (${p.journal_mode}, auto_vacuum=${p.auto_vacuum}) ${PATHS[name]}`);
         }
+
+        await addMissingColumns();
 
         const offenders = await rotationTablesWithForeignKeys();
         if (offenders.length > 0) {

@@ -10,7 +10,7 @@ const TIMEOUT = 15000;
 
 /**
  * YIFY is movie-only and ignores the language list (one fetch returns all
- * languages). Language filtering happens downstream in ResponseCache.
+ * languages). Language filtering happens downstream, when the L1 entry is materialized.
  */
 class YIFYProvider extends BaseProvider {
     constructor(options = {}) {

@@ -12,6 +12,7 @@
 const { log } = require('../../src/utils');
 const { bufferToUtf8 } = require('../../src/utils/encoding');
 const { convertSubtitle, convertToSrt, isAssFormat } = require('./subtitle-converter');
+const { trackTypeOf } = require('./trackType');
 
 let AdmZip = null;
 try { AdmZip = require('adm-zip'); }
@@ -73,6 +74,27 @@ function extractRarEntries(buffer) {
     });
 }
 
+// How much a file of each track type is wanted, given what the entry claims to be. An entry
+// labelled `· HI` must not be served the plain track, and nothing should be served commentary.
+const TRACK_PREFERENCE = {
+    plain:  { commentary: -100, forced: -50, hi:  -10, plain:  50, none: 10 },
+    hi:     { commentary: -100, forced: -50, hi:  100, plain: -10, none:  0 },
+    forced: { commentary: -100, forced: 100, hi:  -50, plain: -50, none:  0 }
+};
+
+/** Of the files matching the episode, the one closest to what the entry claims to be. */
+function pickTrack(matches, track) {
+    if (!matches || matches.length === 0) return null;
+    const table = TRACK_PREFERENCE[track] || TRACK_PREFERENCE.plain;
+    let best = null;
+    let bestScore = -Infinity;
+    for (const entry of matches) {
+        const score = table[trackTypeOf(entry.name) || 'none'];
+        if (score > bestScore) { best = entry; bestScore = score; }
+    }
+    return best;
+}
+
 /**
  * Pick the best subtitle entry for the given hints.
  *
@@ -84,7 +106,7 @@ function extractRarEntries(buffer) {
  *
  * If `episode` is set and no candidate matches, returns null (caller should 404).
  */
-function selectSubtitleEntry(entries, { season, episode, filename, langPatterns } = {}) {
+function selectSubtitleEntry(entries, { season, episode, filename, langPatterns, track } = {}) {
     if (!entries || entries.length === 0) return null;
     if (entries.length === 1 && !episode) return entries[0];
 
@@ -104,7 +126,7 @@ function selectSubtitleEntry(entries, { season, episode, filename, langPatterns 
     if (epNum) {
         if (seNum) {
             const exact = new RegExp(`[sS]0*${season}[eE]${epNum}(?!\\d)`, 'i');
-            const hit = entries.find((e) => exact.test(e.name));
+            const hit = pickTrack(entries.filter((e) => exact.test(e.name)), track);
             if (hit) return hit;
         }
 
@@ -114,15 +136,18 @@ function selectSubtitleEntry(entries, { season, episode, filename, langPatterns 
             new RegExp(`x${epNum}(?!\\d)`, 'i'),
             new RegExp(`\\.${epNum}\\.`),
             new RegExp(`-${epNum}-`),
-            new RegExp(` ${epNum} `)
+            new RegExp(` ${epNum} `),
+            new RegExp(`(?:^|[/\\\\])0*${parseInt(episode, 10)}(?![0-9a-zA-Z])`)
         ];
-        for (const entry of entries) {
+        const matched = entries.filter((entry) => {
             if (seNum) {
                 const m = entry.name.match(/[sS](\d+)[eE]/i);
-                if (m && parseInt(m[1], 10) !== parseInt(season, 10)) continue;
+                if (m && parseInt(m[1], 10) !== parseInt(season, 10)) return false;
             }
-            if (patterns.some((p) => p.test(entry.name))) return entry;
-        }
+            return patterns.some((p) => p.test(entry.name));
+        });
+        const hit = pickTrack(matched, track);
+        if (hit) return hit;
     }
 
     if (filename) {

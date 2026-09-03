@@ -3,77 +3,58 @@
 /**
  * AnimeTosho XYZ (v1) API wrapper.
  *
- * Provides access to subtitle track data embedded in MKV files via the
- * feed.animetosho.xyz v1 JSON API + storage.animetosho.xyz downloads.
+ * feed.animetosho.xyz lists the releases of an AniDB anime id, and ?show=torrent on a release
+ * returns every file with its subtitle attachments. Each attachment already carries a language
+ * code, a format and a working storage URL, so nothing has to be read out of mediainfo.
  *
  * Flow:
- *   1. /json/v1/episodes/{eid}  → releases list for an AniDB episode
- *   2. /json?show=torrent&id=X  → file detail with mediainfo JSON
- *   3. Parse mediainfo → compute track numbers (video + audio + sub_index)
- *   4. storage.animetosho.xyz/releases/{id}/subtitles/{name}_track{n}.{lang}.{ext}.xz
- *
- * Key differences from .org:
- *   - .org returns attachments already indexed per file
- *   - .xyz returns mediainfo JSON from which we compute subtitle tracks ourselves
- *   - .xyz storage uses a different URL pattern (release ID + torrent name + track num)
+ *   1. /json/v1/series/anidb/{aid}  -> releases for the series, 100 per page, ?offset walks back
+ *   2. /json?show=torrent&id=X      -> files, each with attachments[]
+ *   3. storage.animetosho.xyz/...xz  -> the subtitle itself, in one of two path shapes
  */
 
 const { log } = require('../utils');
 
 const XYZ_FEED_URL = 'https://feed.animetosho.xyz/json';
-const XYZ_STORAGE_URL = 'https://storage.animetosho.xyz/releases';
+const XYZ_STORAGE_URL = 'https://storage.animetosho.xyz';
+const PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = 15000;
 const USER_AGENT = 'SubSense-Stremio/2.0';
 const RATE_LIMIT_MS = 2500;
 
-let detailQueue = Promise.resolve();
+const pending = { foreground: [], background: [] };
+let running = false;
 let lastDetailTime = 0;
 
-function enqueueDetailFetch(releaseId) {
-    const task = detailQueue.then(async () => {
-        const now = Date.now();
-        const elapsed = now - lastDetailTime;
-        if (elapsed < RATE_LIMIT_MS) {
-            await new Promise(r => setTimeout(r, RATE_LIMIT_MS - elapsed));
-        }
-        lastDetailTime = Date.now();
-        return _fetchReleaseDetail(releaseId);
-    });
-    detailQueue = task.catch(() => {});
-    return task;
-}
-
 /**
- * Search by AniDB episode ID using v1 API.
- * Returns releases array (filtered to those with metadata_fetched: true).
+ * One request at a time, spaced by RATE_LIMIT_MS, foreground before background so a speculative
+ * pass cannot push a user-facing fetch past the provider deadline.
  */
-async function searchByEpisodeId(eid) {
+async function runDetailQueue() {
+    if (running) return;
+    running = true;
     try {
-        const url = `${XYZ_FEED_URL}/v1/episodes/${eid}`;
-        const response = await fetch(url, {
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { 'User-Agent': USER_AGENT }
-        });
-        if (!response.ok) {
-            log('warn', `[AT-XYZ] Episode ${eid}: HTTP ${response.status}`);
-            return [];
+        for (;;) {
+            const job = pending.foreground.shift() || pending.background.shift();
+            if (!job) return;
+
+            const wait = RATE_LIMIT_MS - (Date.now() - lastDetailTime);
+            if (wait > 0) await new Promise(r => setTimeout(r, wait));
+            lastDetailTime = Date.now();
+
+            let detail = null;
+            try { detail = await _fetchReleaseDetail(job.releaseId); } catch (_) { }
+            job.resolve(detail);
         }
-        const json = await response.json();
-        const releases = json.data?.releases || [];
-        return releases.filter(r => r.metadata_fetched);
-    } catch (err) {
-        log('error', `[AT-XYZ] Episode search error: ${err.message}`);
-        return [];
+    } finally {
+        running = false;
     }
 }
 
-/**
- * Search by AniDB anime ID using v1 API.
- * Returns releases array for the entire series.
- */
-async function searchByAnidbId(anidbId) {
+/** One page of releases, newest first. The feed caps a page at 100 whatever ?limit asks for. */
+async function searchByAnidbId(anidbId, offset = 0) {
     try {
-        const url = `${XYZ_FEED_URL}/v1/series/anidb/${anidbId}`;
+        const url = `${XYZ_FEED_URL}/v1/series/anidb/${anidbId}?limit=${PAGE_SIZE}&offset=${offset}`;
         const response = await fetch(url, {
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
             headers: { 'User-Agent': USER_AGENT }
@@ -83,20 +64,19 @@ async function searchByAnidbId(anidbId) {
             return [];
         }
         const json = await response.json();
-        const releases = json.data?.releases || [];
-        return releases.filter(r => r.metadata_fetched);
+        return json.data?.releases || [];
     } catch (err) {
         log('error', `[AT-XYZ] Series search error: ${err.message}`);
         return [];
     }
 }
 
-/**
- * Get release detail including mediainfo.
- * Queued to respect rate limits.
- */
-function getReleaseDetail(releaseId) {
-    return enqueueDetailFetch(releaseId);
+/** Release detail with its per-file attachment list. Speculative callers pass background: true. */
+function getReleaseDetail(releaseId, { background = false } = {}) {
+    return new Promise((resolve) => {
+        pending[background ? 'background' : 'foreground'].push({ releaseId, resolve });
+        runDetailQueue();
+    });
 }
 
 async function _fetchReleaseDetail(releaseId) {
@@ -116,66 +96,49 @@ async function _fetchReleaseDetail(releaseId) {
     }
 }
 
-/**
- * Parse subtitle tracks from a release detail's mediainfo.
- */
-function parseSubtitleTracks(detail) {
-    if (!detail?.files?.length) return [];
-
-    const file = detail.files[0];
-    if (!file.processed || !file.info?.mediainfo) return [];
-
-    let mediainfo;
-    try {
-        mediainfo = JSON.parse(file.info.mediainfo);
-    } catch (err) {
-        log('debug', `[AT-XYZ] Mediainfo parse error for ${detail.id}: ${err.message}`);
-        return [];
+/** Every subtitle attachment of a release, across all of its files. */
+function extractSubtitles(detail) {
+    const out = [];
+    for (const file of detail?.files || []) {
+        const fileName = file.filename || file.name || null;
+        for (const a of file.attachments || []) {
+            if (a.type !== 'subtitle' || !a.url) continue;
+            const info = a.info || {};
+            const fmt = String(info.format || '').toLowerCase();
+            out.push({
+                id: a.id,
+                url: a.url,
+                fileName,
+                languageCode: info.language_code || null,
+                languageName: info.language || null,
+                format: fmt === 'ssa' ? 'ass' : fmt === 'subrip' ? 'srt' : fmt,
+                forced: !!info.forced,
+                isDefault: !!info.default,
+                title: info.title || null
+            });
+        }
     }
-
-    const numVideo = mediainfo.video?.length || 0;
-    const numAudio = mediainfo.audio?.length || 0;
-    const subtitles = mediainfo.subtitles || [];
-
-    return subtitles.map((sub, index) => ({
-        trackNum: numVideo + numAudio + index,
-        codec: sub.codec || 'unknown',
-        language: sub.language || 'und',
-        title: sub.title || null,
-        ext: (sub.codec === 'ass' || sub.codec === 'ssa') ? 'ass' :
-             sub.codec === 'subrip' ? 'srt' :
-             sub.codec === 'webvtt' ? 'vtt' : sub.codec || 'unknown'
-    }));
+    return out;
 }
 
-/**
- * Build the XZ download URL for a subtitle track on storage.animetosho.xyz.
- *
- * Pattern: /releases/{releaseId}/subtitles/{torrentName}_track{n}.{lang}.{ext}.xz
- */
-function buildStorageUrl(releaseId, torrentName, track) {
-    return `${XYZ_STORAGE_URL}/${releaseId}/subtitles/${encodeURIComponent(torrentName)}_track${track.trackNum}.${track.language}.${track.ext}.xz`;
+/** Tracks mediainfo reports but that have no attachment, so no URL. Coverage only. */
+function countMediainfoTracks(detail) {
+    let count = 0;
+    for (const file of detail?.files || []) {
+        const mediainfo = file.info && file.info.mediainfoj;
+        if (mediainfo && Array.isArray(mediainfo.subtitles)) count += mediainfo.subtitles.length;
+    }
+    return count;
 }
 
-/**
- * Build the SubSense proxy URL for an xyz subtitle track.
- * Encodes (releaseId, trackNum, torrentName) into a single opaque ID.
- */
-function buildProxyUrl(baseUrl, releaseId, track, torrentName, fmt) {
-    const payload = JSON.stringify({
-        r: releaseId,
-        t: track.trackNum,
-        l: track.language,
-        e: track.ext,
-        n: torrentName
-    });
+/** The token carries the attachment id and its storage path, which is all the proxy needs. */
+function buildProxyUrl(baseUrl, subtitle, fmt) {
+    const path = String(subtitle.url).replace(`${XYZ_STORAGE_URL}/`, '');
+    const payload = JSON.stringify({ i: subtitle.id, p: path });
     const encoded = Buffer.from(payload).toString('base64url');
     return `${baseUrl}/api/animetosho-xyz/proxy/${encoded}?fmt=${fmt}`;
 }
 
-/**
- * Decode a proxy token back to its components.
- */
 function decodeProxyToken(token) {
     try {
         const json = Buffer.from(token, 'base64url').toString('utf8');
@@ -185,14 +148,26 @@ function decodeProxyToken(token) {
     }
 }
 
+/**
+ * Rebuild a storage URL from a token path. The payload uses more than one path shape, so the
+ * guard pins the host instead of matching a shape.
+ */
+function storageUrlForPath(path) {
+    const p = String(path || '');
+    if (!p || p.startsWith('/') || p.includes('://') || p.includes('..') || p.includes('\\')) return null;
+    if (!p.toLowerCase().endsWith('.xz')) return null;
+    return `${XYZ_STORAGE_URL}/${p}`;
+}
+
 module.exports = {
-    searchByEpisodeId,
     searchByAnidbId,
     getReleaseDetail,
-    parseSubtitleTracks,
-    buildStorageUrl,
+    extractSubtitles,
+    countMediainfoTracks,
     buildProxyUrl,
     decodeProxyToken,
+    storageUrlForPath,
+    PAGE_SIZE,
     XYZ_FEED_URL,
     XYZ_STORAGE_URL
 };

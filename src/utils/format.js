@@ -1,9 +1,10 @@
 'use strict';
 
-const { mapStremioToWyzie, mapWyzieToStremio } = require('../../src/languages');
+const { mapStremioToWyzie, mapWyzieToStremio, toCanonical } = require('../../src/languages');
 const { log } = require('../../src/utils');
 const { SUBSRC_KEY_PLACEHOLDER } = require('../cache/response-cache');
 const { getSourceDisplayName } = require('../providers/WyzieProvider');
+const { declaredTrack } = require('./trackType');
 
 const PROXY_BASE_URL = process.env.SUBSENSE_BASE_URL ||
     `http://127.0.0.1:${process.env.PORT || 3100}`;
@@ -23,21 +24,33 @@ const PROXY_BASE_URL = process.env.SUBSENSE_BASE_URL ||
  */
 function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
     const wantedPairs = languages
-        .map((stremio) => ({ stremio, wyzie: (mapStremioToWyzie(stremio) || '').toLowerCase() }))
+        .map((stremio) => ({
+            stremio,
+            tag: (toCanonical(stremio) || stremio).toLowerCase(),
+            wyzie: (mapStremioToWyzie(stremio) || '').toLowerCase()
+        }))
         .filter((p) => p.wyzie);
 
     const byLanguage = Object.create(null);
     for (const lang of languages) byLanguage[lang] = [];
     const others = [];
+    const exactMatches = new Set();
 
     for (const sub of subtitles) {
-        const subLang = (sub.lang || sub.language || '').toLowerCase().substring(0, 2);
-        const matched = wantedPairs.find((p) => p.wyzie === subLang);
-        if (matched) byLanguage[matched.stremio].push(sub);
-        else others.push(sub);
+        const raw = sub.lang || sub.language || '';
+        const subLang = (toCanonical(raw) || raw).toLowerCase();
+        const subBase = (mapStremioToWyzie(raw) || subLang.split('-')[0] || '').toLowerCase();
+        const exact = wantedPairs.find((p) => p.tag === subLang);
+        const matched = exact || wantedPairs.find((p) => p.wyzie === subBase);
+        if (matched) {
+            byLanguage[matched.stremio].push(sub);
+            if (exact) exactMatches.add(sub);
+        } else others.push(sub);
     }
 
-    for (const lang of languages) byLanguage[lang].sort(qualityRank);
+    const rankExactFirst = (a, b) =>
+        (exactMatches.has(b) ? 1 : 0) - (exactMatches.has(a) ? 1 : 0) || qualityRank(a, b);
+    for (const lang of languages) byLanguage[lang].sort(rankExactFirst);
     others.sort(qualityRank);
 
     const out = [];
@@ -61,6 +74,16 @@ function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
 }
 
 /**
+ * Stremio wants a 3-letter code, and a regional variant has no 3-letter form,
+ * so the tag is emitted as-is for those.
+ */
+function toStremioLang(code) {
+    const canonical = toCanonical(code);
+    if (!canonical) return mapWyzieToStremio(String(code).substring(0, 2));
+    return canonical.includes('-') ? canonical : mapWyzieToStremio(canonical);
+}
+
+/**
  * Format provider subtitles for Stremio.
  *
  * For ASS/SSA sources we emit two entries per subtitle so the user can pick:
@@ -71,38 +94,40 @@ function prioritizeByLanguage(subtitles, languages, maxPerLang = 0) {
  * query so the proxy serves the right format for each emitted entry.
  */
 function formatForStremio(subtitles, opts = {}) {
+    return renderEntries(buildEntries(subtitles, opts));
+}
+
+/**
+ * The cache shape: what a served entry needs and cannot recompute. `id` and `label` are
+ * left to renderEntries. `url`, `lang` and `source` keep their names because the stats
+ * and cleanup readers of the stored blob read them directly.
+ */
+function buildEntries(subtitles, opts = {}) {
     const keepAss = !!opts.keepAss;
     const out = [];
-    let idx = 0;
 
     for (const sub of subtitles) {
         const subLang = sub.lang || sub.language || 'und';
-        const lang = mapWyzieToStremio(subLang.substring(0, 2));
+        const lang = toStremioLang(subLang);
         const source = Array.isArray(sub.source) ? sub.source[0] : (sub.source || 'Unknown');
-        const isHI = !!(sub.hearingImpaired || sub.isHearingImpaired || sub.hi);
         const release = sub.releaseName || sub.release || sub.media || '';
-        let nameForLabel = sub.fileName || release || '';
-        if (sub.trackName) nameForLabel = nameForLabel ? `${nameForLabel} · ${sub.trackName}` : sub.trackName;
 
         const format = (sub.format || '').toLowerCase();
         const isAss = format === 'ass' || format === 'ssa' || sub.needsConversion === true;
         const sourceUrl = withSubsourcePlaceholder(sub.url);
 
-        const matchMeta = {};
-        if (sub.fileName) matchMeta.fileName = sub.fileName;
-        if (release) matchMeta.releaseName = release;
-        if (Array.isArray(sub.releases) && sub.releases.length > 0) matchMeta.releases = sub.releases;
+        const declared = declaredTrack(sub.fileName || release || '',
+            sub.hearingImpaired || sub.isHearingImpaired || sub.hi);
 
-        const emit = (fmt, url) => {
-            out.push({
-                id: buildId(idx++, fmt, source, lang),
-                url,
-                lang,
-                label: buildLabel(source, fmt, nameForLabel, isHI),
-                source,
-                ...matchMeta
-            });
-        };
+        const meta = {};
+        if (sub.fileName) meta.n = sub.fileName;
+        if (release) meta.r = release;
+        if (Array.isArray(sub.releases) && sub.releases.length > 0) meta.R = sub.releases;
+        if (declared === 'hi') meta.h = 1;
+        if (declared === 'forced') meta.x = 1;
+        if (sub.trackName) meta.t = sub.trackName;
+
+        const emit = (fmt, url) => out.push({ url, lang, source, f: (fmt || 'srt').toLowerCase(), ...meta });
 
         if (isAss) {
             if (sub.needsConversion === false) {
@@ -127,16 +152,43 @@ function formatForStremio(subtitles, opts = {}) {
     return valid;
 }
 
+/**
+ * Rebuild the served entry. The id index is the array position, so a list merged from
+ * several cache rows cannot repeat an id. Entries cached before the lean shape carry
+ * their own label and are passed through.
+ */
+function renderEntries(entries) {
+    return entries.map((entry, idx) => {
+        if (entry.label !== undefined) {
+            return entry.id ? { ...entry, id: String(entry.id).replace(/-\d+$/, `-${idx}`) } : entry;
+        }
+        const base = entry.n || entry.r || '';
+        const name = entry.t ? (base ? `${base} · ${entry.t}` : entry.t) : base;
+        const out = {
+            id: buildId(idx, entry.f, entry.source, entry.lang),
+            url: entry.url,
+            lang: entry.lang,
+            label: buildLabel(entry.source, entry.f, name, !!entry.h, !!entry.x),
+            source: entry.source
+        };
+        if (entry.n) out.fileName = entry.n;
+        if (entry.r) out.releaseName = entry.r;
+        if (entry.R) out.releases = entry.R;
+        return out;
+    });
+}
+
 // Provider-proxy paths that perform server-side extraction+conversion and
 // honor a `?fmt=ass|vtt` hint so we can request the original ASS bytes.
 const PROVIDER_PROXY_RE = /\/api\/(yify|tvsubtitles|subsource|betaseries|opensubtitles|gestdown|animetosho|animetosho-xyz|subdl)\/proxy\//;
 
-// Build the user-facing label: "Provider · [FORMAT] · <name> · [HI]"
-function buildLabel(provider, fmt, name, isHI) {
+// Build the user-facing label: "Provider · [FORMAT] · <name> · [HI|FORCED]"
+function buildLabel(provider, fmt, name, isHI, isForced) {
     const parts = [displayProvider(provider), `[${(fmt || 'srt').toUpperCase()}]`];
     if (name) parts.push(name);
     let label = parts.join(' · ');
-    if (isHI) label += ' · HI';
+    if (isForced) label += ' · FORCED';
+    else if (isHI) label += ' · HI';
     return label;
 }
 
@@ -203,5 +255,7 @@ function scoreRating(sub) {
 module.exports = {
     prioritizeByLanguage,
     formatForStremio,
+    buildEntries,
+    renderEntries,
     PROXY_BASE_URL
 };

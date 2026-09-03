@@ -3,9 +3,60 @@
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log } = require('../utils');
 const { toSubdlCode, getBySubdlCode, toAlpha3B, getDisplayName } = require('../languages');
-const { guessit } = require('guessit-js');
+const mediaParser = require('../utils/mediaParser');
+const { declaredTrack } = require('../utils/trackType');
 
 const API_BASE = 'https://api.subdl.com/api/v1';
+
+// A language-filtered search returns 1-2 pages for an episode and 4-12 for a movie
+const MAX_SEARCH_PAGES = 10;
+
+function intEnv(name, fallback) {
+    const v = parseInt(process.env[name], 10);
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+// SubDL sheds on how many requests are in flight from one exit IP
+const MAX_IN_FLIGHT = intEnv('SUBDL_MAX_IN_FLIGHT', 8);
+let inFlight = 0;
+const waiting = [];
+
+function acquireSlot() {
+    if (inFlight < MAX_IN_FLIGHT) {
+        inFlight++;
+        return Promise.resolve();
+    }
+    return new Promise(resolve => waiting.push(resolve));
+}
+
+function releaseSlot() {
+    const next = waiting.shift();
+    if (next) next();
+    else inFlight--;
+}
+
+const RATE_LIMIT_DEFAULT_MS = 5 * 1000;
+const RATE_LIMIT_MAX_MS = 60 * 1000;
+let rateLimitedUntil = 0;
+
+function parseRetryAfter(value) {
+    if (!value) return null;
+    const seconds = Number(value);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    const when = Date.parse(value);
+    return Number.isFinite(when) ? Math.max(0, when - Date.now()) : null;
+}
+
+function rateLimitRemaining() {
+    const left = rateLimitedUntil - Date.now();
+    return left > 0 ? left : 0;
+}
+
+function noteRateLimited(retryAfterMs) {
+    const waitMs = Math.min(retryAfterMs == null ? RATE_LIMIT_DEFAULT_MS : retryAfterMs, RATE_LIMIT_MAX_MS);
+    rateLimitedUntil = Date.now() + waitMs;
+    return waitMs;
+}
 
 class SubDLProvider extends BaseProvider {
     constructor(options = {}) {
@@ -24,12 +75,19 @@ class SubDLProvider extends BaseProvider {
         const apiKey = query.apiKeys && query.apiKeys.subdl;
         if (!apiKey) return { subtitles: [] };
 
+        if (rateLimitRemaining() > 0) return { subtitles: [] };
+
         const languages = Array.isArray(query.languages) && query.languages.length > 0
             ? query.languages : [null];
 
         const subdlLangs = languages
             .map(l => l ? toSubdlCode(l) : null)
             .filter(Boolean);
+
+        if (subdlLangs.length === 0) {
+            log('debug', '[SubDL] no requested language maps to a SubDL code, skipping search');
+            return { subtitles: [] };
+        }
 
         const startedAt = Date.now();
         try {
@@ -78,10 +136,15 @@ class SubDLProvider extends BaseProvider {
 
         let allSubs = [...result.subtitles];
 
-        const totalPages = result.totalPages || 1;
+        const reportedPages = result.totalPages || 1;
+        const totalPages = Math.min(reportedPages, MAX_SEARCH_PAGES);
+        if (reportedPages > MAX_SEARCH_PAGES) {
+            log('debug', `[SubDL] capped at ${MAX_SEARCH_PAGES} of ${reportedPages} pages`);
+        }
         for (let page = 2; page <= totalPages; page++) {
             const pageResult = await this._apiRequest({ ...params, page: String(page) });
-            if (pageResult?.status && Array.isArray(pageResult.subtitles)) {
+            if (!pageResult || pageResult.error === 'rate_limited') break;
+            if (pageResult.status && Array.isArray(pageResult.subtitles)) {
                 allSubs.push(...pageResult.subtitles);
             }
         }
@@ -103,7 +166,10 @@ class SubDLProvider extends BaseProvider {
             if (v != null) url.searchParams.set(k, v);
         }
 
+        await acquireSlot();
         try {
+            if (rateLimitRemaining() > 0) return { status: false, error: 'rate_limited' };
+
             const response = await fetch(url.toString(), {
                 headers: {
                     'User-Agent': 'SubSense-Stremio/2.0',
@@ -115,7 +181,8 @@ class SubDLProvider extends BaseProvider {
                 return { status: false, error: 'invalid_api_key' };
             }
             if (response.status === 429) {
-                log('warn', '[SubDL] Rate limited (429)');
+                const waitMs = noteRateLimited(parseRetryAfter(response.headers.get('retry-after')));
+                log('warn', `[SubDL] shed (429), pausing searches for ${Math.round(waitMs / 1000)}s`);
                 return { status: false, error: 'rate_limited' };
             }
             if (!response.ok) {
@@ -126,6 +193,8 @@ class SubDLProvider extends BaseProvider {
         } catch (error) {
             log('error', `[SubDL] Request failed: ${error.message}`);
             return null;
+        } finally {
+            releaseSlot();
         }
     }
 
@@ -157,14 +226,13 @@ class SubDLProvider extends BaseProvider {
         if (!releaseName) return true;
 
         try {
-            const parsed = guessit(releaseName);
+            const parsed = mediaParser.parse(releaseName);
 
-            if (parsed.type === 'movie') return false;
+            if (parsed.contentType === 'movie') return false;
 
-            const parsedSeason = parsed.season || null;
-            const parsedEpisodes = parsed.episode != null
-                ? (Array.isArray(parsed.episode) ? parsed.episode : [parsed.episode])
-                : [];
+            const parsedSeasons = parsed.seasons || [];
+            const parsedSeason = parsedSeasons.length === 1 ? parsedSeasons[0] : null;
+            const parsedEpisodes = parsed.episodes || [];
 
             if (parsedEpisodes.length === 0) {
                 if (parsedSeason == null || parsedSeason === season) return true;
@@ -186,11 +254,16 @@ class SubDLProvider extends BaseProvider {
         const { season, episode, filename } = opts;
 
         // Build proxy URL (SubDL downloads are public, no API key needed)
+        const releaseName = sub.release_name || sub.name || '';
+        // A pack holds several tracks per episode; `track` tells the proxy which one this line is.
+        const track = declaredTrack(releaseName, !!sub.hi);
+
         const encodedUrl = encodeURIComponent((sub.url || '').replace(/^\/+/, ''));
         const params = new URLSearchParams();
         if (season != null) params.set('season', String(season));
         if (episode != null) params.set('episode', String(episode));
         if (filename) params.set('filename', filename);
+        if (track !== 'plain') params.set('track', track);
         const queryStr = params.toString();
         const downloadUrl = `${this.baseUrl}/api/subdl/proxy/${encodedUrl}${queryStr ? '?' + queryStr : ''}`;
 
@@ -198,7 +271,6 @@ class SubDLProvider extends BaseProvider {
         const stremioCode = lang ? toAlpha3B(lang.alpha2) : 'und';
         const displayName = lang ? getDisplayName(lang.alpha2) : (sub.language || 'Unknown');
 
-        const releaseName = sub.release_name || sub.name || '';
         const releases = Array.isArray(sub.releases) ? sub.releases : [];
 
         return new SubtitleResult({

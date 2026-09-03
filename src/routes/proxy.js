@@ -11,8 +11,10 @@
  *   GET /api/subdl/proxy/*                 SubDL ZIP proxy (public, no API key)
  *   GET /api/betaseries/proxy/:subtitleId
  *
- * All proxy results are cached in a single bounded LRU keyed by
- * `${provider}:${id}:${variant}`. Conversion runs at most once per cache entry.
+ * Proxy results are cached in two tiers keyed by `${provider}:${id}:${variant}`: a bounded
+ * per-worker LRU, and a Redis tier shared by every worker that survives a restart. Without
+ * the shared tier each worker re-downloads what its siblings already hold, which is the
+ * volume that gets our exit IP throttled upstream. Conversion runs at most once per entry.
  */
 
 const express = require('express');
@@ -21,6 +23,7 @@ const cheerio = require('cheerio');
 const { log } = require('../../src/utils');
 const { warpFetch } = require('../utils/warpFetch');
 const { subdlFetch } = require('../utils/subdlFetch');
+const { redis, isHealthy, safe } = require('../infra/redis');
 const {
     extractSubtitleEntries,
     selectSubtitleEntry,
@@ -44,6 +47,10 @@ catch (_) { log('warn', '[proxy] crypto unavailable; SubSource downloads will be
 const PROXY_CACHE_MAX = parseInt(process.env.PROXY_CACHE_MAX, 10) || 5000;
 const PROXY_CACHE_MAX_BYTES = parseInt(process.env.PROXY_CACHE_MAX_BYTES, 10) || 256 * 1024 * 1024;
 const PROXY_CACHE_TTL_MS = (parseInt(process.env.PROXY_CACHE_TTL_HOURS, 10) || 24) * 60 * 60 * 1000;
+
+const PROXY_REDIS_PREFIX = 'ss:px:';
+const PROXY_REDIS_TTL_S = Math.floor(PROXY_CACHE_TTL_MS / 1000);
+const PROXY_REDIS_MAX_BYTES = parseInt(process.env.PROXY_REDIS_MAX_BYTES, 10) || 4 * 1024 * 1024;
 
 const proxyCache = new Map(); // key -> { content, contentType, headers, storedAt, bytes }
 const inflight = new Map();   // key -> Promise<entry>
@@ -76,6 +83,9 @@ function cacheGet(key) {
 }
 
 function cacheSet(key, entry) {
+    if (entry && typeof entry.content === 'string') {
+        entry = { ...entry, content: Buffer.from(entry.content, 'utf8') };
+    }
     const bytes = entryBytes(entry);
     if (bytes > PROXY_CACHE_MAX_BYTES) return;
 
@@ -87,6 +97,32 @@ function cacheSet(key, entry) {
     }
     proxyCache.set(key, { ...entry, storedAt: Date.now(), bytes });
     cacheBytes += bytes;
+}
+
+/** Bodies are stored as raw bytes in a hash, so nothing pays a base64 tax. */
+async function sharedGet(key) {
+    if (!isHealthy()) return null;
+    const raw = await safe(r => r.hgetallBuffer(PROXY_REDIS_PREFIX + key));
+    if (!raw || !raw.c) return null;
+    let headers = {};
+    if (raw.h) { try { headers = JSON.parse(raw.h.toString('utf8')); } catch (_) { /* drop unreadable headers */ } }
+    return { content: raw.c, contentType: raw.t ? raw.t.toString('utf8') : 'text/plain', headers };
+}
+
+function sharedSet(key, entry) {
+    if (!isHealthy()) return;
+    const body = Buffer.isBuffer(entry.content) ? entry.content : Buffer.from(String(entry.content));
+    if (body.length === 0 || body.length > PROXY_REDIS_MAX_BYTES) return;
+    const k = PROXY_REDIS_PREFIX + key;
+    safe(async r => {
+        await r.hset(k, 'c', body, 't', entry.contentType || 'text/plain',
+                     'h', JSON.stringify(entry.headers || {}));
+        await r.expire(k, PROXY_REDIS_TTL_S);
+    });
+}
+
+function getSharedCacheStats() {
+    return { enabled: isHealthy(), prefix: PROXY_REDIS_PREFIX, ttlSeconds: PROXY_REDIS_TTL_S };
 }
 
 function dedupe(key, fn) {
@@ -118,8 +154,16 @@ function resolveEntry(cacheKey, build) {
     return dedupe(cacheKey, async () => {
         const cached = cacheGet(cacheKey);
         if (cached) return { entry: cached, hit: true };
+
+        const shared = await sharedGet(cacheKey);
+        if (shared) {
+            cacheSet(cacheKey, shared);
+            return { entry: shared, hit: true };
+        }
+
         const fresh = await build();
         cacheSet(cacheKey, fresh);
+        sharedSet(cacheKey, fresh);
         return { entry: fresh, hit: false };
     });
 }
@@ -290,10 +334,10 @@ async function fetchTvsubs(subtitleId, episodeUrl, fmt = 'vtt') {
 
 router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     const { subtitleId } = req.params;
-    const { key, season, episode, filename } = req.query;
+    const { key, season, episode, filename, track } = req.query;
     const fmt = pickFmt(req);
     const fileHint = (typeof filename === 'string' && filename.trim()) ? filename.trim().toLowerCase() : 'nofilename';
-    const cacheKey = `subsource:${subtitleId}:${season || 'all'}:${episode || 'all'}:${fileHint}:${fmt}`;
+    const cacheKey = `subsource:${subtitleId}:${season || 'all'}:${episode || 'all'}:${fileHint}:${track || 'plain'}:${fmt}`;
 
     if (!key) return res.status(401).send('SubSource API key required');
     if (!decryptConfig) return res.status(500).send('Encryption not configured');
@@ -307,7 +351,7 @@ router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     }
 
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchSubsource(subtitleId, apiKey, { season, episode, filename, fmt }));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchSubsource(subtitleId, apiKey, { season, episode, filename, track, fmt }));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/subsource] ${err.message}`);
@@ -315,7 +359,7 @@ router.get('/subsource/proxy/:subtitleId/:releaseName?', async (req, res) => {
     }
 });
 
-async function fetchSubsource(subtitleId, apiKey, { season, episode, filename, fmt = 'vtt' }) {
+async function fetchSubsource(subtitleId, apiKey, { season, episode, filename, track, fmt = 'vtt' }) {
     const url = `https://api.subsource.net/api/v1/subtitles/${subtitleId}/download`;
     const dlRes = await fetch(url, {
         headers: {
@@ -337,7 +381,7 @@ async function fetchSubsource(subtitleId, apiKey, { season, episode, filename, f
         throw err;
     }
 
-    const selected = selectSubtitleEntry(entries, { season, episode, filename });
+    const selected = selectSubtitleEntry(entries, { season, episode, filename, track });
     if (!selected) {
         const err = new Error(`Episode ${episode} not found in this pack`);
         err.status = 404;
@@ -483,15 +527,15 @@ router.get('/subdl/proxy/*', async (req, res) => {
     subdlPath = decodeURIComponent(subdlPath).replace(/^\/+/, '');
     if (!subdlPath) return res.status(400).send('Missing subtitle path');
 
-    const { season, episode, filename } = req.query;
+    const { season, episode, filename, track } = req.query;
     const fmt = pickFmt(req);
     const fileHint = (typeof filename === 'string' && filename.trim())
         ? filename.trim().toLowerCase() : 'nofilename';
-    const cacheKey = `subdl:${subdlPath}:${season || 'all'}:${episode || 'all'}:${fileHint}:${fmt}`;
+    const cacheKey = `subdl:${subdlPath}:${season || 'all'}:${episode || 'all'}:${fileHint}:${track || 'plain'}:${fmt}`;
 
     try {
         const { entry, hit } = await resolveEntry(cacheKey,
-            () => fetchSubdl(subdlPath, { season, episode, filename, fmt }));
+            () => fetchSubdl(subdlPath, { season, episode, filename, track, fmt }));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/subdl] ${err.message}`);
@@ -499,7 +543,7 @@ router.get('/subdl/proxy/*', async (req, res) => {
     }
 });
 
-async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' }) {
+async function fetchSubdl(subdlPath, { season, episode, filename, track, fmt = 'vtt' }) {
     const downloadUrl = `https://dl.subdl.com/${subdlPath}`;
     const dlRes = await subdlFetch(downloadUrl, {
         headers: { 'User-Agent': 'SubSense/2.0' }
@@ -526,7 +570,7 @@ async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' })
         };
     }
 
-    const selected = selectSubtitleEntry(entries, { season, episode, filename });
+    const selected = selectSubtitleEntry(entries, { season, episode, filename, track });
     if (!selected) {
         const err = new Error('No matching subtitle in SubDL archive');
         err.status = 404;
@@ -553,9 +597,9 @@ async function fetchSubdl(subdlPath, { season, episode, filename, fmt = 'vtt' })
 // AnimeTosho subtitle proxy
 // =====================================================
 
-let lzma = null;
-try { lzma = require('lzma-native'); }
-catch (_) { log('warn', '[proxy] lzma-native unavailable; AnimeTosho downloads disabled'); }
+let xz = null;
+try { xz = require('@napi-rs/lzma').xz; }
+catch (_) { log('warn', '[proxy] @napi-rs/lzma unavailable; AnimeTosho downloads disabled'); }
 
 /**
  * AnimeTosho subtitle proxy.
@@ -572,7 +616,7 @@ router.get('/animetosho/proxy/:hexId', async (req, res) => {
         return res.status(400).send('Invalid attachment ID');
     }
 
-    if (!lzma) {
+    if (!xz) {
         return res.status(500).send('XZ decompression not available');
     }
 
@@ -603,13 +647,12 @@ async function fetchAnimetosho(hexId, fmt = 'vtt') {
 
     const compressed = Buffer.from(await response.arrayBuffer());
 
-    // Decompress XZ using lzma-native
-    const decompressed = await new Promise((resolve, reject) => {
-        lzma.decompress(compressed, (result, error) => {
-            if (error) reject(new Error(`XZ decompression failed: ${error}`));
-            else resolve(result);
-        });
-    });
+    let decompressed;
+    try {
+        decompressed = await xz.decompress(compressed);
+    } catch (e) {
+        throw new Error(`XZ decompression failed: ${e.message}`);
+    }
 
     const text = decompressed.toString('utf8');
 
@@ -637,12 +680,12 @@ async function fetchAnimetosho(hexId, fmt = 'vtt') {
 // AnimeTosho XYZ subtitle proxy (storage.animetosho.xyz)
 // =====================================================
 
-const { decodeProxyToken, buildStorageUrl } = require('../utils/animetoshoXyzApi');
+const { decodeProxyToken, storageUrlForPath } = require('../utils/animetoshoXyzApi');
 
 /**
  * AnimeTosho XYZ subtitle proxy.
  * Downloads XZ-compressed subtitle from storage.animetosho.xyz, decompresses, converts.
- * The token encodes release ID, track number, language, extension, and torrent name.
+ * The token encodes the attachment id and the storage path the feed payload gave us.
  *
  * GET /api/animetosho-xyz/proxy/:token?fmt=vtt|ass|srt
  */
@@ -650,30 +693,28 @@ router.get('/animetosho-xyz/proxy/:token', async (req, res) => {
     const { token } = req.params;
     const fmt = pickFmt(req);
 
-    if (!lzma) {
+    if (!xz) {
         return res.status(500).send('XZ decompression not available');
     }
 
     const decoded = decodeProxyToken(token);
-    if (!decoded || !decoded.r || decoded.t == null || !decoded.n) {
+    const url = decoded && storageUrlForPath(decoded.p);
+    if (!url || decoded.i == null) {
         return res.status(400).send('Invalid proxy token');
     }
 
-    const cacheKey = `animetosho-xyz:${decoded.r}:${decoded.t}:${fmt}`;
+    const cacheKey = `animetosho-xyz:${decoded.i}:${fmt}`;
 
     try {
-        const { entry, hit } = await resolveEntry(cacheKey, () => fetchAnimetoshoXyz(decoded, fmt));
+        const { entry, hit } = await resolveEntry(cacheKey, () => fetchAnimetoshoXyz(url, fmt));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
-        log('error', `[proxy/animetosho-xyz] ${decoded.r}/track${decoded.t}: ${err.message}`);
+        log('error', `[proxy/animetosho-xyz] attachment ${decoded.i}: ${err.message}`);
         res.status(err.status || 500).send(`AnimeTosho XYZ proxy error: ${err.message}`);
     }
 });
 
-async function fetchAnimetoshoXyz(decoded, fmt = 'vtt') {
-    const track = { trackNum: decoded.t, language: decoded.l, ext: decoded.e };
-    const url = buildStorageUrl(decoded.r, decoded.n, track);
-
+async function fetchAnimetoshoXyz(url, fmt = 'vtt') {
     const response = await fetch(url, {
         headers: { 'User-Agent': 'SubSense-Stremio/2.0' },
         signal: AbortSignal.timeout(30000)
@@ -687,12 +728,12 @@ async function fetchAnimetoshoXyz(decoded, fmt = 'vtt') {
 
     const compressed = Buffer.from(await response.arrayBuffer());
 
-    const decompressed = await new Promise((resolve, reject) => {
-        lzma.decompress(compressed, (result, error) => {
-            if (error) reject(new Error(`XZ decompression failed: ${error}`));
-            else resolve(result);
-        });
-    });
+    let decompressed;
+    try {
+        decompressed = await xz.decompress(compressed);
+    } catch (e) {
+        throw new Error(`XZ decompression failed: ${e.message}`);
+    }
 
     const text = decompressed.toString('utf8');
 
@@ -757,5 +798,5 @@ async function fetchGestdown(subtitleId, fmt = 'vtt') {
 }
 
 module.exports = router;
-module.exports._cache = { cacheGet, cacheSet, getProxyCacheStats, PROXY_CACHE_MAX_BYTES };
+module.exports._cache = { cacheGet, cacheSet, sharedGet, sharedSet, getProxyCacheStats, getSharedCacheStats, PROXY_CACHE_MAX_BYTES };
 module.exports.getProxyCacheStats = getProxyCacheStats;

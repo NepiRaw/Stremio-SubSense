@@ -229,9 +229,11 @@ const _indexBySubsource = new Map();
 
 LANGUAGE_TABLE.forEach((lang, idx) => {
     _indexByAlpha2.set(lang.alpha2.toLowerCase(), idx);
-    _indexByAlpha3B.set(lang.alpha3B.toLowerCase(), idx);
+    const alpha3B = lang.alpha3B.toLowerCase();
+    if (!_indexByAlpha3B.has(alpha3B)) _indexByAlpha3B.set(alpha3B, idx);
     if (lang.alpha3T !== lang.alpha3B) {
-        _indexByAlpha3T.set(lang.alpha3T.toLowerCase(), idx);
+        const alpha3T = lang.alpha3T.toLowerCase();
+        if (!_indexByAlpha3T.has(alpha3T)) _indexByAlpha3T.set(alpha3T, idx);
     }
     _indexByName.set(lang.name.toLowerCase(), idx);
     
@@ -563,7 +565,9 @@ function getByAnyCode(code) {
     if (!code) return null;
     const lowerCode = code.toLowerCase();
     
-    // Check special mappings first
+    const ownTag = getByAlpha2(lowerCode);
+    if (ownTag) return ownTag;
+
     if (SPECIAL_CODE_MAPPINGS[lowerCode]) {
         const mappedCode = SPECIAL_CODE_MAPPINGS[lowerCode];
         return getByAlpha2(mappedCode) || getByAlpha3B(mappedCode);
@@ -768,6 +772,29 @@ function mapStremioToWyzie(code) {
 }
 
 /**
+ * Does a subtitle's language satisfy a requested tag? Exact first, then the base
+ * language, so pt and pt-BR still serve each other when nothing better exists.
+ * Tolerates either side being alpha2, alpha3B or a regional tag.
+ */
+function sameLanguage(requested, subtitleLang) {
+    if (!requested || !subtitleLang) return false;
+    const a = (toCanonical(requested) || String(requested)).toLowerCase();
+    const b = (toCanonical(subtitleLang) || String(subtitleLang)).toLowerCase();
+    if (a === b) return true;
+    const baseA = mapStremioToWyzie(a);
+    return !!baseA && baseA === mapStremioToWyzie(b);
+}
+
+/**
+ * Canonical internal form: the table's alpha2 tag, region included.
+ */
+function toCanonical(code) {
+    if (!code) return null;
+    const lang = getByAnyCode(code);
+    return lang ? lang.alpha2 : null;
+}
+
+/**
  * Normalize language code to ISO 639-2/B
  * @param {string} code - Any language code
  * @returns {string} Normalized B code or original
@@ -848,6 +875,8 @@ module.exports = {
     getByAnyCode,
     
     // Conversion functions
+    toCanonical,
+    sameLanguage,
     toAlpha3B,
     toAlpha2,
     toYifyCode,

@@ -1,22 +1,11 @@
 /**
- * Filename Similarity Matching Utilities (v2)
- * Uses @ctrl/video-filename-parser for rich filename parsing.
+ * Filename Similarity Matching Utilities
+ * Scores subtitle candidates against the user's video filename. The parser is parsium, reached
+ * through src/utils/mediaParser.js, which owns the LRU.
  */
 
 const { log } = require('../utils');
-
-const parseCache = new Map();
-const CACHE_MAX_SIZE = 1000;
-let filenameParse = null;
-
-/** Initialize ESM parser */
-async function getParser() {
-    if (!filenameParse) {
-        const module = await import('@ctrl/video-filename-parser');
-        filenameParse = module.filenameParse;
-    }
-    return filenameParse;
-}
+const { adaptForMatcher } = require('./mediaParser');
 
 /** Check if string is a real filename (not URL or empty) */
 function isRealFilename(filename) {
@@ -25,89 +14,6 @@ function isRealFilename(filename) {
     const hasMediaExtension = /\.(mkv|mp4|avi|mov|webm|wmv|flv|m4v|srt|sub|ass|ssa|vtt)$/i.test(filename);
     const hasReleaseParts = /[\.\-_]/.test(filename) && filename.length > 10;
     return hasMediaExtension || hasReleaseParts;
-}
-
-/** Parse filename with caching */
-function parseFilename(filename, isTv = true) {
-    if (!filename || !filenameParse) return null;
-    
-    const cacheKey = `${filename}:${isTv}`;
-    if (parseCache.has(cacheKey)) return parseCache.get(cacheKey);
-    
-    try {
-        const parsed = filenameParse(filename, isTv);
-        if (parseCache.size >= CACHE_MAX_SIZE) {
-            const firstKey = parseCache.keys().next().value;
-            parseCache.delete(firstKey);
-        }
-        parseCache.set(cacheKey, parsed);
-        return parsed;
-    } catch (error) {
-        return null;
-    }
-}
-
-/** Sync parse using cache or fallback regex */
-function parseFilenameSync(filename) {
-    if (!filename) return {};
-    
-    const cacheKey = `${filename}:true`;
-    if (parseCache.has(cacheKey)) return parseCache.get(cacheKey);
-    
-    const fallback = {
-        group: extractReleaseGroupSimple(filename),
-        resolution: extractResolutionSimple(filename),
-        sources: extractSourcesSimple(filename),
-        videoCodec: extractCodecSimple(filename),
-        seasons: [],
-        episodeNumbers: []
-    };
-    
-    const seMatch = filename.match(/[Ss](\d+)[Ee](\d+)/);
-    if (seMatch) {
-        fallback.seasons = [parseInt(seMatch[1], 10)];
-        fallback.episodeNumbers = [parseInt(seMatch[2], 10)];
-    }
-    return fallback;
-}
-
-// Simple extraction fallbacks
-function extractReleaseGroupSimple(filename) {
-    if (!filename) return null;
-    const withoutExt = filename.replace(/\.[a-z0-9]{2,4}$/i, '');
-    const match = withoutExt.match(/-([A-Za-z0-9]+)$/);
-    return match ? match[1] : null;
-}
-
-function extractResolutionSimple(filename) {
-    if (!filename) return null;
-    const match = filename.match(/\b(2160p|1440p|1080p|720p|480p|4k)\b/i);
-    if (match) {
-        const res = match[1].toUpperCase();
-        return res === '4K' ? '2160P' : res;
-    }
-    return null;
-}
-
-function extractSourcesSimple(filename) {
-    if (!filename) return [];
-    const sources = [];
-    const lower = filename.toLowerCase();
-    if (/blu-?ray|bdremux|bdrip/i.test(lower)) sources.push('BLURAY');
-    if (/web-?dl/i.test(lower)) sources.push('WEBDL');
-    if (/webrip/i.test(lower)) sources.push('WEBRIP');
-    if (/hdtv/i.test(lower)) sources.push('TV');
-    if (/dvdrip|dvd/i.test(lower)) sources.push('DVD');
-    return sources;
-}
-
-function extractCodecSimple(filename) {
-    if (!filename) return null;
-    if (/x265|hevc|h\.?265/i.test(filename)) return 'x265';
-    if (/x264|h\.?264|avc/i.test(filename)) return 'x264';
-    if (/xvid/i.test(filename)) return 'xvid';
-    if (/av1/i.test(filename)) return 'AV1';
-    return null;
 }
 
 /**
@@ -184,73 +90,14 @@ function calculateParsedSimilarity(videoParsed, subtitleParsed, contentType = 's
 // downloadCount becomes the primary sort signal
 const MIN_FILENAME_SCORE = 10;
 
-/** Sort subtitles by filename similarity (async - uses full parser) */
-async function sortByFilenameSimilarityAsync(subtitles, videoFilename, contentType = 'series') {
-    if (!Array.isArray(subtitles) || subtitles.length === 0) return subtitles;
-    if (!isRealFilename(videoFilename)) return subtitles;
-    
-    await getParser();
-    const isTv = contentType === 'series';
-    const startTime = Date.now();
-    
-    const videoParsed = parseFilename(videoFilename, isTv);
-    if (!videoParsed) return subtitles;
-    
-    const scored = subtitles.map((sub, originalIndex) => {
-        const candidates = [
-            sub.fileName,
-            sub.releaseName,
-            ...(sub.releases || [])
-        ].filter(c => c && typeof c === 'string' && c.length > 0);
-
-        let score = 0;
-        if (candidates.length > 0) {
-            const scores = candidates.map(c => {
-                const parsed = parseFilename(c, isTv);
-                return parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
-            });
-            score = Math.max(...scores);
-        } else {
-            const matchString = sub.releaseInfo || sub.release || sub.id || sub.SubFileName || '';
-            const parsed = parseFilename(matchString, isTv);
-            score = parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
-        }
-
-        return { subtitle: sub, score, originalIndex };
-    });
-    
-    scored.sort((a, b) => {
-        // 3-tier scoring: >=MIN → real match, 0..MIN → no match (DL fallback), <0 → wrong content (last)
-        const scoreA = a.score < 0 ? -1 : (a.score >= MIN_FILENAME_SCORE ? a.score : 0);
-        const scoreB = b.score < 0 ? -1 : (b.score >= MIN_FILENAME_SCORE ? b.score : 0);
-
-        // Primary: filename similarity score (with threshold applied)
-        if (scoreB !== scoreA) return scoreB - scoreA;
-        // Secondary: download count as tiebreaker (higher = better)
-        const dlA = a.subtitle.downloadCount || 0;
-        const dlB = b.subtitle.downloadCount || 0;
-        if (dlA !== dlB) return dlB - dlA;
-        // Tertiary: preserve original quality-sorted order
-        return a.originalIndex - b.originalIndex;
-    });
-    
-    const elapsed = Date.now() - startTime;
-    log('debug', `[Filename Matching] Sorted ${subtitles.length} subs in ${elapsed}ms`);
-    
-    return scored.map(s => s.subtitle);
-}
-
-/** Sync version (uses cache or fallback) */
+/** Sort subtitles by how well their names match the video filename. */
 function sortByFilenameSimilarity(subtitles, videoFilename, contentType = 'series') {
     if (!Array.isArray(subtitles) || subtitles.length === 0) return subtitles;
     if (!isRealFilename(videoFilename)) return subtitles;
-    
-    const isTv = contentType === 'series';
-    const videoParsed = filenameParse ? parseFilename(videoFilename, isTv) : parseFilenameSync(videoFilename);
-    if (!videoParsed) return subtitles;
-    
-    const parseFn = filenameParse ? parseFilename : parseFilenameSync;
-    
+
+    const startTime = Date.now();
+    const videoParsed = adaptForMatcher(videoFilename);
+
     const scored = subtitles.map((sub, originalIndex) => {
         const candidates = [
             sub.fileName,
@@ -260,90 +107,34 @@ function sortByFilenameSimilarity(subtitles, videoFilename, contentType = 'serie
 
         let score = 0;
         if (candidates.length > 0) {
-            const scores = candidates.map(c => {
-                const parsed = parseFn(c, isTv);
-                return parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
-            });
-            score = Math.max(...scores);
+            score = Math.max(...candidates.map(c =>
+                calculateParsedSimilarity(videoParsed, adaptForMatcher(c), contentType)));
         } else {
             const matchString = sub.releaseInfo || sub.release || sub.id || sub.SubFileName || '';
-            const parsed = parseFn(matchString, isTv);
-            score = parsed ? calculateParsedSimilarity(videoParsed, parsed, contentType) : 0;
+            score = calculateParsedSimilarity(videoParsed, adaptForMatcher(matchString), contentType);
         }
 
         return { subtitle: sub, score, originalIndex };
     });
-    
+
     scored.sort((a, b) => {
+        // 3-tier scoring: >=MIN -> real match, 0..MIN -> no match (DL fallback), <0 -> wrong content (last)
         const scoreA = a.score < 0 ? -1 : (a.score >= MIN_FILENAME_SCORE ? a.score : 0);
         const scoreB = b.score < 0 ? -1 : (b.score >= MIN_FILENAME_SCORE ? b.score : 0);
+
         if (scoreB !== scoreA) return scoreB - scoreA;
         const dlA = a.subtitle.downloadCount || 0;
         const dlB = b.subtitle.downloadCount || 0;
         if (dlA !== dlB) return dlB - dlA;
         return a.originalIndex - b.originalIndex;
     });
+
+    log('debug', `[Filename Matching] Sorted ${subtitles.length} subs in ${Date.now() - startTime}ms`);
     return scored.map(s => s.subtitle);
 }
 
-/** Preload parser on server startup */
-async function preloadParser() {
-    try {
-        await getParser();
-        parseFilename('Sample.Show.S01E01.720p.BluRay.x264-GROUP.mkv', true);
-        log('info', '[Filename Matching] Parser preloaded successfully');
-    } catch (error) {
-        log('warn', `[Filename Matching] Failed to preload parser: ${error.message}`);
-    }
-}
-
-// Legacy exports
-function extractReleaseGroup(filename) {
-    return extractReleaseGroupSimple(filename);
-}
-
-function extractQualityTags(filename) {
-    if (!filename) return [];
-    const tags = [];
-    if (extractResolutionSimple(filename)) tags.push(extractResolutionSimple(filename).toLowerCase());
-    tags.push(...extractSourcesSimple(filename).map(s => s.toLowerCase()));
-    const codec = extractCodecSimple(filename);
-    if (codec) tags.push(codec.toLowerCase());
-    return tags;
-}
-
-function extractSeasonEpisode(filename) {
-    if (!filename) return null;
-    const match = filename.match(/[Ss](\d+)[Ee](\d+)/);
-    if (match) {
-        return { season: parseInt(match[1], 10), episode: parseInt(match[2], 10) };
-    }
-    return null;
-}
-
-// Simple score calculation for legacy compatibility
-function calculateSimilarityScore(videoFilename, subtitleReleaseName, contentType = 'series') {
-    const videoParsed = parseFilenameSync(videoFilename);
-    const subtitleParsed = parseFilenameSync(subtitleReleaseName);
-    const score = calculateParsedSimilarity(videoParsed, subtitleParsed, contentType);
-    return score / 100; // Normalize to 0-1 range for legacy compatibility
-}
-
 module.exports = {
-    // Main functions
     isRealFilename,
     sortByFilenameSimilarity,
-    sortByFilenameSimilarityAsync,
-    preloadParser,
-    
-    // Utility functions
-    parseFilename,
-    parseFilenameSync,
-    calculateParsedSimilarity,
-    
-    // Legacy exports (for backwards compatibility)
-    extractReleaseGroup,
-    extractQualityTags,
-    extractSeasonEpisode,
-    calculateSimilarityScore
+    calculateParsedSimilarity
 };

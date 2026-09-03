@@ -39,13 +39,7 @@ function getLocalDateString() {
 }
 
 class StatsDBAsync {
-    /**
-     * @param {() => boolean} writesEnabled  - returns true when full writes are permitted
-     * @param {() => boolean} minimalEnabled - returns true when at least minimal tracking is on
-     */
-    constructor(writesEnabled, minimalEnabled) {
-        this._writesEnabled  = writesEnabled  || (() => true);
-        this._minimalEnabled = minimalEnabled || (() => true);
+    constructor() {
         this._lastSourceScanAt = 0;
     }
 
@@ -426,17 +420,18 @@ class StatsDBAsync {
     async getLanguageSuccessRates(days = 30) {
         try {
             const r = await db.execute(`
-                SELECT SUM(requests) AS total_requests,
+                SELECT SUM(pref_tracked) AS tracked,
                        SUM(any_pref_found) AS any_found,
                        SUM(all_pref_found) AS all_found
-                FROM stats_daily WHERE date >= date('now', '-' || ? || ' days')
+                FROM stats_daily
+                WHERE date >= date('now', '-' || ? || ' days') AND pref_tracked > 0
             `, [days]);
             const row = r.rows[0] || {};
-            const total = row.total_requests || 0;
+            const tracked = row.tracked || 0;
             return {
-                totalRequests: total,
-                anyPreferredRate: total > 0 ? Math.round((row.any_found || 0) / total * 100) : 0,
-                allPreferredRate: total > 0 ? Math.round((row.all_found || 0) / total * 100) : 0
+                totalRequests: tracked,
+                anyPreferredRate: tracked > 0 ? Math.round((row.any_found || 0) / tracked * 100) : 0,
+                allPreferredRate: tracked > 0 ? Math.round((row.all_found || 0) / tracked * 100) : 0
             };
         } catch (err) {
             log('error', `[StatsDB] getLanguageSuccessRates error: ${err.message}`);
