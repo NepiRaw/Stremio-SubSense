@@ -22,7 +22,7 @@
     "@cospired/i18n-iso-languages": "^4.2.0",
     "@libsql/client": "^0.17.0",
     "@napi-rs/lzma": "^1.5.1",
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.0",
     "ass-compiler": "^0.1.16",
     "chardet": "^2.1.1",
     "cheerio": "^1.1.2",
@@ -33,9 +33,7 @@
     "node-unrar-js": "^2.0.2",
     "parsium-media": "^1.1.0",
     "socks-proxy-agent": "^8.0.5",
-    "stremio-addon-sdk": "^1.6.10",
-    "subsrt-ts": "^2.1.2",
-    "ytssubs": "^1.0.2"
+    "subsrt-ts": "^2.1.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
