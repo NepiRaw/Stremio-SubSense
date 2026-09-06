@@ -23,6 +23,7 @@ const WARP_DOMAINS = new Set((process.env.WARP_DOMAINS || '').split(',').map(d =
 /** One request through the proxy. `onRedirect` carries the caller's own redirect policy. */
 function warpRequest(url, options, onRedirect) {
     return new Promise((resolve, reject) => {
+        if (options.guard) options.guard(url);
         const parsed = new URL(url);
         const mod = parsed.protocol === 'https:' ? https : http;
         const reqOpts = {

@@ -17,8 +17,11 @@
  * volume that gets our exit IP throttled upstream. Conversion runs at most once per entry.
  */
 
+const dns = require('dns');
+const net = require('net');
 const express = require('express');
 const cheerio = require('cheerio');
+const { Agent, buildConnector, setGlobalDispatcher } = require('undici');
 
 const { log } = require('../../src/utils');
 const { warpFetch } = require('../utils/warpFetch');
@@ -32,6 +35,113 @@ const {
     bufferToText,
     contentTypeFor
 } = require('../utils/archive');
+
+/**
+ * SSRF guard, two layers.
+ *  1. Blocks any connection to a non-public address
+ *  2. Pins the generic subtitle proxy to the hosts we actually download subtitles from
+ */
+const PRIVATE_V4 = [
+    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+    ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16],
+    ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4]
+];
+
+// Subtitle-source domains allowed in the proxy route
+const SUBTITLE_DOMAINS = [
+    'wyzie.io', 'betaseries.com', 'opensubtitles.org', 'opensubtitles.com',
+    'subdl.com', 'subsource.net', 'yts-subs.com', 'tvsubtitles.net',
+    'gestdown.info', 'animetosho.org', 'animetosho.xyz', 'subf2m.co',
+    'addic7ed.com', 'podnapisi.com', 'jimaku.cc', 'kitsunekko.net', 'indexsubtitle.cc'
+];
+
+const SELF_ORIGIN = (() => {
+    try {
+        return new URL(process.env.SUBSENSE_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3100}`).origin;
+    } catch (_) { return null; }
+})();
+
+const isSubtitleDomain = (host) => SUBTITLE_DOMAINS.some(d => host === d || host.endsWith('.' + d));
+
+const ipv4ToInt = (ip) => ip.split('.').reduce((n, o) => (n << 8) + (+o), 0) >>> 0;
+
+function isPublicIp(ip) {
+    const family = net.isIP(ip);
+    if (family === 4) {
+        const addr = ipv4ToInt(ip);
+        return !PRIVATE_V4.some(([base, bits]) => (addr >>> (32 - bits)) === (ipv4ToInt(base) >>> (32 - bits)));
+    }
+    if (family !== 6) return false;
+    const a = ip.toLowerCase().split('%')[0];
+    const mapped = a.match(/^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (mapped) return isPublicIp(mapped[1]);
+    if (a === '::' || a === '::1') return false;
+    return !/^(f[cd]|fe[89ab]|ff)/.test(a.split(':')[0]);
+}
+
+function ipLiteral(hostname) {
+    const bare = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+    return net.isIP(bare) ? bare : null;
+}
+
+function guardedLookup(hostname, options, cb) {
+    dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
+        if (err) return cb(err);
+        const list = Array.isArray(addresses) ? addresses : [addresses];
+        const bad = list.find(a => !isPublicIp(a.address));
+        if (bad) return cb(new Error(`blocked non-public address ${bad.address}`));
+        if (options && options.all) return cb(null, list);
+        return cb(null, list[0].address, list[0].family);
+    });
+}
+
+const baseConnector = buildConnector({ lookup: guardedLookup });
+const plainConnector = buildConnector({});
+
+function isSelfTarget(hostname, port) {
+    if (!SELF_ORIGIN) return false;
+    const self = new URL(SELF_ORIGIN);
+    return self.hostname === hostname && (self.port || (self.protocol === 'https:' ? '443' : '80')) === port;
+}
+
+// undici skips `lookup` when the hostname is already an address, so literals are checked here.
+function guardedConnector(restrictToSubtitleHosts) {
+    return (options, callback) => {
+        const hostname = options.hostname || '';
+        const port = String(options.port || (options.protocol === 'https:' ? 443 : 80));
+        if (restrictToSubtitleHosts) {
+            if (isSelfTarget(hostname, port)) return plainConnector(options, callback);
+            if (!isSubtitleDomain(hostname)) return callback(new Error(`host not allowed (${hostname})`));
+        }
+        const literal = ipLiteral(hostname);
+        if (literal && !isPublicIp(literal)) {
+            return callback(new Error(`blocked non-public address ${literal}`));
+        }
+        return baseConnector(options, callback);
+    };
+}
+
+setGlobalDispatcher(new Agent({ connect: guardedConnector(false) }));
+
+const subtitleDispatcher = new Agent({ connect: guardedConnector(true) });
+
+/** Layer 2 at the URL, so a rejected target is a 403 instead of a socket error. */
+function assertAllowedSubtitleUrl(rawUrl) {
+    let url;
+    try { url = new URL(rawUrl); } catch (_) { throw proxyError(400, 'invalid URL'); }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw proxyError(403, 'scheme not allowed');
+    }
+    if (url.origin === SELF_ORIGIN) return url;
+    if (!isSubtitleDomain(url.hostname)) throw proxyError(403, `host not allowed (${url.hostname})`);
+    return url;
+}
+
+function proxyError(status, message) {
+    const err = new Error(message);
+    err.status = status;
+    return err;
+}
 
 /**
  * Fetch with WARP SOCKS5 proxy
@@ -184,6 +294,8 @@ router.get('/subtitle/:format/*', async (req, res) => {
     const cacheKey = `subtitle:${format}:${originalUrl}`;
 
     try {
+        assertAllowedSubtitleUrl(originalUrl);
+
         const { entry, hit } = await resolveEntry(cacheKey, async () => {
             const proxiedUrl = new URL(originalUrl);
             for (const [k, v] of Object.entries(req.query || {})) {
@@ -200,7 +312,9 @@ router.get('/subtitle/:format/*', async (req, res) => {
 
             const fetchHeaders = {};
             const response = await proxyFetch(proxiedUrl.toString(), {
-                headers: Object.keys(fetchHeaders).length > 0 ? fetchHeaders : undefined
+                headers: Object.keys(fetchHeaders).length > 0 ? fetchHeaders : undefined,
+                dispatcher: subtitleDispatcher,
+                guard: assertAllowedSubtitleUrl
             });
             if (!response.ok) {
                 const err = new Error(`upstream ${response.status}`);
