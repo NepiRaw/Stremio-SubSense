@@ -140,6 +140,7 @@ function assertAllowedSubtitleUrl(rawUrl) {
 function proxyError(status, message) {
     const err = new Error(message);
     err.status = status;
+    err.expose = true;
     return err;
 }
 
@@ -316,11 +317,7 @@ router.get('/subtitle/:format/*', async (req, res) => {
                 dispatcher: subtitleDispatcher,
                 guard: assertAllowedSubtitleUrl
             });
-            if (!response.ok) {
-                const err = new Error(`upstream ${response.status}`);
-                err.status = response.status;
-                throw err;
-            }
+            if (!response.ok) throw proxyError(response.status, `upstream ${response.status}`);
             const buffer = Buffer.from(await response.arrayBuffer());
 
             const text = bufferToText(buffer);
@@ -336,8 +333,10 @@ router.get('/subtitle/:format/*', async (req, res) => {
         });
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
-        log('error', `[proxy/subtitle] ${err.message}`);
-        res.status(err.status || 500).send(`Subtitle proxy error: ${err.message}`);
+        log('error', `[proxy/subtitle] ${err.expose ? err.message : err.name} (${cacheKey})`);
+        res.status(err.status || 500)
+            .type('text/plain')
+            .send(err.expose ? `Subtitle proxy error: ${err.message}` : 'Subtitle proxy error');
     }
 });
 
