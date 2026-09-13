@@ -186,7 +186,7 @@ Access your addon at `http://localhost:3100`
 | `WYZIE_API_KEYS` | **Required** | — | Wyzie API key(s), comma-separated for pool rotation (get keys at https://sub.wyzie.io/redeem) |
 | `WYZIE_SOURCES` | Optional | All available sources | Override the Wyzie sources queried by the `wyzie` provider |
 | `BETASERIES_API_KEY` | Optional | — | Server-side BetaSeries API key for BetaSeries subtitle searches |
-| `ANIDB_CLIENT` | Optional | — | AniDB HTTP API client name (register at [anidb.net](https://anidb.net)). Required for AnimeTosho TV episode search |
+| `ANIDB_CLIENT` | Optional | — | AniDB HTTP API client name (register at [anidb.net](https://anidb.net)). Required for AnimeTosho TV episode search, and for long-running series that AniDB numbers 1..N while Stremio splits them into seasons |
 | `ANIDB_CLIENT_VER` | Optional | — | AniDB HTTP API client version. Required alongside `ANIDB_CLIENT` |
 | `SUBSOURCE_API_KEY` | Optional | — | Server-side SubSource API key for local testing/admin validation only. End users normally provide their own key through addon configuration |
 | `WEB_CONCURRENCY` | Optional | `1` | Request workers to fork. `auto` uses CPU count minus one |

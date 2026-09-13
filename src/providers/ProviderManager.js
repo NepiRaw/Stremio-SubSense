@@ -107,7 +107,8 @@ class ProviderManager {
     /**
      * Race the provider against the deadline. If the deadline wins, the
      * provider's pending search becomes the backgroundPromise so its results
-     * can warm the cache when they eventually arrive.
+     * can warm the cache when they eventually arrive, followed by any
+     * background work the provider itself deferred.
      */
     _raceWithDeadline(provider, query, deadlineMs) {
         const startedAt = Date.now();
@@ -130,7 +131,7 @@ class ProviderManager {
                 log('warn', `[ProviderManager] ${provider.name} exceeded ${deadlineMs}ms; deferring to background`);
                 resolve({
                     subtitles: [],
-                    backgroundPromise: searchPromise,
+                    backgroundPromise: searchPromise.then(settleBackground),
                     timedOut: true
                 });
             }, deadlineMs);
@@ -169,6 +170,14 @@ class ProviderManager {
             provider.resetStats();
         }
     }
+}
+
+/** A timed-out search still owes the handler whatever its own background work finds. */
+async function settleBackground(res) {
+    const subs = (res && res.subtitles) || [];
+    if (!res || !res.backgroundPromise) return { subtitles: subs };
+    const late = await res.backgroundPromise.catch(() => null);
+    return { subtitles: dedupe([...subs, ...((late && late.subtitles) || [])]) };
 }
 
 function dedupe(list) {

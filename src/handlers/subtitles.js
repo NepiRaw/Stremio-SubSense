@@ -249,6 +249,10 @@ function scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encr
             l2.set(parsed.imdbId, parsed.season, parsed.episode, uniqueLangs(validated), validated)
                 .then((delta) => { if (delta) track.dist(delta); }).catch(() => {});
             log('info', `[handler] stale-refresh ${reqTag(parsed, languages)} -> ${validated.length} subs`);
+
+            if (Array.isArray(res.backgroundPromises) && res.backgroundPromises.length > 0) {
+                wireBackgroundPromises(res.backgroundPromises, parsed, languages, parsedConfig, cacheKey, validated);
+            }
         } catch (err) {
             log('debug', `[handler] stale-refresh failed: ${err.message}`);
         } finally {

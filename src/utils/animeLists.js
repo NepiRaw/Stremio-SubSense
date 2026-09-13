@@ -110,7 +110,26 @@ function getAnidbIdForImdb(imdbId, season) {
         };
     }
 
-    return null;
+    return unseasonedFallback(entries, season);
+}
+
+/**
+ * Long-running shows have one TV entry with no season at all: AniDB numbers it 1..N while
+ * Stremio splits it into seasons. It covers every season below the first one a seasoned TV
+ * sibling claims. The caller must map the season/episode to an absolute number.
+ */
+function unseasonedFallback(entries, season) {
+    if (!(season > 0)) return null;
+    const unseasoned = entries.filter(e => e.type === 'TV' && e.season == null);
+    if (unseasoned.length !== 1) return null;
+
+    const claimed = entries
+        .filter(e => e.type === 'TV' && e.season?.tvdb > 0)
+        .map(e => e.season.tvdb);
+    const coveredBelowSeason = claimed.length ? Math.min(...claimed) : Infinity;
+    if (season >= coveredBelowSeason) return null;
+
+    return { anidbId: unseasoned[0].anidb_id, episodeOffset: 0, type: 'TV', absolute: true, coveredBelowSeason };
 }
 
 /**

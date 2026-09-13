@@ -14,9 +14,10 @@
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log } = require('../utils');
 const { getAnidbIdForImdb, getAnimeListReady, isAnime } = require('../utils/animeLists');
-const { getEpisodeId, isAnidbConfigured } = require('../utils/anidbApi');
+const { getEpisodeId, getAnimeTitle, isAnidbConfigured } = require('../utils/anidbApi');
 const { searchByEpisodeId, searchByAnidbId, getTorrentDetail, buildProxyUrl } = require('../utils/animetoshoApi');
 const xyzApi = require('../utils/animetoshoXyzApi');
+const absoluteEpisode = require('../utils/absoluteEpisode');
 const { scoreReleaseSeason, parse: parseMedia } = require('../utils/mediaParser');
 const { getByAlpha3B, getDisplayName, toAlpha3B } = require('../languages');
 
@@ -41,6 +42,7 @@ class AnimeToshoProvider extends BaseProvider {
         this.stats.xyzReleasesExamined = 0;
         this.stats.xyzReleasesWithoutAttachments = 0;
         this.stats.xyzWalks = 0;
+        this.stats.absoluteRefused = 0;
     }
 
     getSources() {
@@ -56,7 +58,10 @@ class AnimeToshoProvider extends BaseProvider {
         if (!isAnime(query.imdbId)) return { subtitles: [] };
 
         const mapping = getAnidbIdForImdb(query.imdbId, query.season);
-        if (!mapping) return { subtitles: [] };
+        if (!mapping) {
+            log('debug', `[AnimeTosho] No AniDB mapping for ${query.imdbId} S${query.season}`);
+            return { subtitles: [] };
+        }
 
         const cacheKey = `${query.imdbId}:${query.season || 0}:${query.episode || 0}`;
         const cached = this._getFromCache(cacheKey);
@@ -66,16 +71,58 @@ class AnimeToshoProvider extends BaseProvider {
             return { subtitles: filtered };
         }
 
+        const resolved = await this._resolveEpisode(query, mapping);
+        if (!resolved) return { subtitles: [] };
+
         const startedAt = Date.now();
         try {
-            const subtitles = await this._searchSources(query, mapping, cacheKey);
+            const subtitles = await this._searchSources(resolved.query, resolved.mapping, cacheKey);
             this._recordRequest(true, Date.now() - startedAt, subtitles.length);
-            return { subtitles };
+            return { subtitles, backgroundPromise: this._backgroundPromise(resolved.query, cacheKey) };
         } catch (err) {
             this._recordRequest(false, Date.now() - startedAt, 0, err);
             log('error', `[AnimeTosho] Search failed: ${err.message}`);
             return { subtitles: [] };
         }
+    }
+
+    /**
+     * The AniDB episode number that bare-numbered file names are matched against
+     */
+    async _resolveEpisode(query, mapping) {
+        const q = { ...query, backgroundTasks: [] };
+        if (query.season == null || query.episode == null) return { query: q, mapping };
+
+        q.seriesTitle = await getAnimeTitle(mapping.anidbId).catch(() => null);
+
+        if (!mapping.absolute) {
+            q.absoluteEpisode = query.episode - mapping.episodeOffset;
+            return { query: q, mapping };
+        }
+
+        const absolute = await absoluteEpisode.resolveAbsoluteEpisode({
+            imdbId: query.imdbId, season: query.season, episode: query.episode,
+            anidbId: mapping.anidbId, coveredBelowSeason: mapping.coveredBelowSeason
+        });
+        if (!absolute) {
+            this.stats.absoluteRefused++;
+            return null;
+        }
+        q.absoluteEpisode = absolute;
+        return { query: q, mapping: { ...mapping, episodeOffset: query.episode - absolute } };
+    }
+
+    _backgroundPromise(query, cacheKey) {
+        const tasks = query.backgroundTasks;
+        if (!tasks || !tasks.length) return null;
+        return Promise.allSettled(tasks).then(() => ({
+            subtitles: this._filterByLanguages(this._getFromCache(cacheKey) || [], query.languages)
+        }));
+    }
+
+    _track(query, promise) {
+        if (query.backgroundTasks) query.backgroundTasks.push(promise);
+        return promise;
     }
 
     _getFromCache(key) {
@@ -114,55 +161,63 @@ class AnimeToshoProvider extends BaseProvider {
             return this._filterByLanguages(xyzResults, query.languages);
         }
 
-        // Missing this request is acceptable, the walk caches the episode for the next one.
+        // Missing this request is acceptable, the walk feeds the cache and the background promise.
         if (query.season != null && query.episode != null) {
             this._pageXyzInBackground(mapping.anidbId, query, cacheKey, seenLanguageKeys);
         }
 
-        const entries = await this._resolveOrgEntries(query, mapping);
-        if (!entries.length) return [];
-        return this._fetchSubtitlesFromEntries(entries, query, cacheKey);
+        const { entries, viaAnime } = await this._resolveOrgEntries(query, mapping);
+        const subtitles = entries.length ? await this._fetchSubtitlesFromEntries(entries, query, cacheKey) : [];
+        if (subtitles.length || !entries.length || viaAnime) return subtitles;
+
+        const batches = await this._orgEntriesByAnime(query, mapping);
+        return batches.length ? this._fetchSubtitlesFromEntries(batches, query, cacheKey) : [];
     }
 
     /** Release list from .org: by episode id for TV, by anime id for movies and as the fallback. */
     async _resolveOrgEntries(query, mapping) {
         const { anidbId, episodeOffset } = mapping;
-        if (query.season == null || query.episode == null) return searchByAnidbId(anidbId);
+        const none = { entries: [], viaAnime: false };
+        if (query.season == null || query.episode == null) return { entries: await searchByAnidbId(anidbId), viaAnime: true };
 
         if (!isAnidbConfigured()) {
             log('debug', '[AnimeTosho] AniDB not configured - skipping .org TV episode search');
-            return [];
+            return none;
         }
 
         const episodeNum = query.episode - episodeOffset;
         if (!Number.isFinite(episodeNum) || episodeNum < 1) {
             log('warn', `[AnimeTosho] Episode ${query.episode} with offset ${episodeOffset} = ${episodeNum} (invalid)`);
-            return [];
+            return none;
         }
 
         const eid = await getEpisodeId(anidbId, episodeNum);
         if (!eid) {
             log('debug', `[AnimeTosho] No eid for AniDB ${anidbId} ep ${episodeNum}`);
-            return [];
+            return none;
         }
 
         const byEid = await searchByEpisodeId(eid);
-        if (byEid.length) return byEid;
+        if (byEid.length) return { entries: byEid, viaAnime: false };
 
         log('info', `[AnimeTosho] eid ${eid} returned 0 results, falling back to aids=${anidbId} + episode filter`);
-        const allEntries = await searchByAnidbId(anidbId);
-        const filtered = await this._filterEntriesByEpisode(allEntries, query.season, episodeNum);
-        log('debug', `[AnimeTosho] Fallback filtered ${allEntries.length} → ${filtered.length} entries for S${query.season}E${episodeNum}`);
+        return { entries: await this._orgEntriesByAnime(query, mapping), viaAnime: true };
+    }
+
+    async _orgEntriesByAnime(query, mapping) {
+        const allEntries = await searchByAnidbId(mapping.anidbId);
+        const filtered = this._filterEntriesByEpisode(allEntries, query);
+        log('debug', `[AnimeTosho] Anime filter ${allEntries.length} -> ${filtered.length} entries for S${query.season}E${query.episode} (abs ${query.absoluteEpisode})`);
         return filtered;
     }
 
     /** Add the .org archive to the cache after a .xyz hit, off the deadline. */
     _warmOrgInBackground(query, mapping, cacheKey, subtitles) {
-        (async () => {
-            const entries = await this._resolveOrgEntries(query, mapping);
+        this._track(query, (async () => {
+            const { entries } = await this._resolveOrgEntries(query, mapping);
             if (!entries.length) return;
-            this._fetchRemainingInBackground(entries, new Set(), subtitles, cacheKey);
-        })().catch(err => log('debug', `[AnimeTosho] Background .org warm failed: ${err.message}`));
+            await this._fetchRemainingInBackground(entries, new Set(), subtitles, cacheKey, query);
+        })().catch(err => log('debug', `[AnimeTosho] Background .org warm failed: ${err.message}`)));
     }
 
     async _fetchSubtitlesFromEntries(entries, query, cacheKey) {
@@ -175,7 +230,7 @@ class AnimeToshoProvider extends BaseProvider {
             const detail = await getTorrentDetail(entry.id);
             if (!detail) continue;
 
-            const allResults = this._buildSubtitleResults(detail, entry, null, seenAttachments);
+            const allResults = this._buildSubtitleResults(detail, entry, query, seenAttachments);
             subtitles.push(...allResults);
 
             // Early exit: if we found matching subs for the requested language
@@ -183,16 +238,16 @@ class AnimeToshoProvider extends BaseProvider {
             if (matchingLang.length > 0 && i < topEntries.length - 1) {
                 // Background fetches ALL remaining entries
                 const remaining = entries.slice(i + 1);
-                this._fetchRemainingInBackground(remaining, seenAttachments, subtitles, cacheKey);
+                this._track(query, this._fetchRemainingInBackground(remaining, seenAttachments, subtitles, cacheKey, query));
                 return matchingLang;
             }
         }
 
         if (entries.length > SEARCH_THRESHOLD) {
             const remaining = entries.slice(SEARCH_THRESHOLD);
-            this._fetchRemainingInBackground(remaining, seenAttachments, subtitles, cacheKey);
+            this._track(query, this._fetchRemainingInBackground(remaining, seenAttachments, subtitles, cacheKey, query));
         } else {
-            this._putInCache(cacheKey, subtitles);
+            this._mergeIntoCache(cacheKey, subtitles);
         }
 
         return this._filterByLanguages(subtitles, query.languages);
@@ -202,14 +257,14 @@ class AnimeToshoProvider extends BaseProvider {
      * Continue fetching ALL remaining torrent details in the background.
      * Does NOT filter by language - caches all subtitles for future requests.
      */
-    _fetchRemainingInBackground(entries, seenAttachments, subtitles, cacheKey) {
+    _fetchRemainingInBackground(entries, seenAttachments, subtitles, cacheKey, query) {
         const bgStart = Date.now();
-        (async () => {
+        return (async () => {
             for (const entry of entries) {
                 try {
                     const detail = await getTorrentDetail(entry.id);
                     if (!detail) continue;
-                    const results = this._buildSubtitleResults(detail, entry, null, seenAttachments);
+                    const results = this._buildSubtitleResults(detail, entry, query, seenAttachments);
                     subtitles.push(...results);
                 } catch (err) {
                     log('debug', `[AnimeTosho] Background fetch ${entry.id} failed: ${err.message}`);
@@ -217,72 +272,52 @@ class AnimeToshoProvider extends BaseProvider {
             }
 
             // Cache ALL subtitles (all languages) for future requests
-            this._putInCache(cacheKey, subtitles);
+            this._mergeIntoCache(cacheKey, subtitles);
             const langs = [...new Set(subtitles.map(s => s.language))].join(',');
             log('info', `[AnimeTosho] Background done for ${cacheKey}: ${subtitles.length} subs (${langs}) in ${((Date.now() - bgStart) / 1000).toFixed(1)}s`);
         })().catch(err => log('error', `[AnimeTosho] Background fetch error: ${err.message}`));
     }
 
-    /**
-     * Filter entries from ?aids= response by episode number using title parsing.
-     * Uses the shared parser, then a regex fallback for anime-style titles.
-     */
-    async _filterEntriesByEpisode(entries, season, episodeNum) {
-        const matched = [];
+    /** Entries from ?aids= whose title names the episode. Batches pass, their files are filtered on detail. */
+    _filterEntriesByEpisode(entries, query) {
+        return entries.filter(entry => this._titleMatchesEpisode(entry.title || '', query, { allowRange: true }));
+    }
 
-        for (const entry of entries) {
-            if (!entry.title) continue;
-
-            try {
-                const parsed = parseMedia(entry.title);
-                if (parsed && parsed.episodes && parsed.episodes.length > 0) {
-                    if (parsed.episodes.includes(episodeNum)) {
-                        matched.push(entry);
-                        continue;
-                    }
-                    continue;
-                }
-            } catch (e) { }
-
-            // Method 3: Regex fallback for anime-style naming (e.g., "- 01", "Episode 01", "E01")
-            if (this._titleMatchesEpisode(entry.title, season, episodeNum)) {
-                matched.push(entry);
-            }
-        }
-
-        return matched;
+    _titleMatchesEpisode(name, query, opts = {}) {
+        return this._episodeVerdict(name, query, opts) === 'match';
     }
 
     /**
-     * Regex fallback for episode matching in anime titles.
-     * Matches patterns like: S01E01, "- 01", "Episode 01", "Ep 01", "E01"
+     * A season form must equal the Stremio pair, a bare number must equal the AniDB absolute number
      */
-    _titleMatchesEpisode(title, season, episodeNum) {
-        const epStr = String(episodeNum).padStart(2, '0');
-        const epNum = String(episodeNum);
-        const seasonStr = season != null ? String(season).padStart(2, '0') : null;
+    _episodeVerdict(name, query, { allowRange = false } = {}) {
+        const parsed = parseMedia(String(name || '').split('/').pop());
+        if (namesAnotherShow(parsed.title, query.seriesTitle)) return 'other';
 
-        if (seasonStr) {
-            const sxex = new RegExp(`S${seasonStr}E${epStr}\\b`, 'i');
-            if (sxex.test(title)) return true;
-        }
+        const episodes = parsed.episodes || [];
+        if (!episodes.length) return 'unknown';
+        if (!allowRange && episodes.length > 2) return 'other';
 
-        const dashEp = new RegExp(`\\s-\\s0*${epNum}\\s*(?:[\\[\\(v]|$)`, 'i');
-        if (dashEp.test(title)) return true;
-
-        const epWord = new RegExp(`\\b(?:Episode|Ep)\\s*0*${epNum}\\b`, 'i');
-        if (epWord.test(title)) return true;
-
-        return false;
+        const { season, episode, absoluteEpisode = episode } = query;
+        const seasons = parsed.seasons || [];
+        const match = seasons.length ? seasons.includes(season) && episodes.includes(episode) : episodes.includes(absoluteEpisode);
+        return match ? 'match' : 'other';
     }
 
     /**
      * Build SubtitleResult objects from a torrent detail response.
-     * Deduplicates by attachment ID across entries.
+     * Deduplicates by attachment ID across entries. 
+     * A multi-file torrent keeps only the file that names the wanted episode
      */
     _buildSubtitleResults(detail, entry, query, seenAttachments) {
         const results = [];
-        const files = detail.files || [];
+        let files = detail.files || [];
+        if (query && query.season != null && query.episode != null) {
+            const verdict = (name) => this._episodeVerdict(name || '', query);
+            files = files.length > 1
+                ? files.filter(f => verdict(f.filename) === 'match')
+                : files.filter(f => verdict(f.filename) !== 'other' && verdict(entry.title) !== 'other');
+        }
 
         for (const file of files) {
             const attachments = file.attachments || [];
@@ -358,18 +393,20 @@ class AnimeToshoProvider extends BaseProvider {
     /** Merge a late arrival into the cache without discarding whatever landed there first. */
     _mergeIntoCache(cacheKey, found) {
         if (!found.length) return;
-        this._putInCache(cacheKey, [...(this._getFromCache(cacheKey) || []), ...found]);
+        const cached = this._getFromCache(cacheKey) || [];
+        const known = new Set(cached.map(s => s.id));
+        this._putInCache(cacheKey, [...cached, ...found.filter(s => !known.has(s.id))]);
     }
 
     /** Collect the releases the deadline had no time for, so the next request sees them. */
     _collectXyzInBackground(releases, query, cacheKey, seenLanguageKeys) {
-        (async () => {
+        this._track(query, (async () => {
             const found = await this._collectXyzSubtitles(releases, query, seenLanguageKeys, { background: true });
             this._mergeIntoCache(cacheKey, found);
             if (found.length) {
                 log('info', `[AnimeTosho-XYZ] Background added ${found.length} subs for ${cacheKey}`);
             }
-        })().catch(err => log('debug', `[AnimeTosho-XYZ] Background collect failed: ${err.message}`));
+        })().catch(err => log('debug', `[AnimeTosho-XYZ] Background collect failed: ${err.message}`)));
     }
 
     /**
@@ -436,12 +473,11 @@ class AnimeToshoProvider extends BaseProvider {
 
             // A one-file release whose title names the episode is that episode, whatever the file is called.
             const wholeRelease = byEpisode && (detail.files || []).length === 1 &&
-                this._titleMatchesEpisode(release.title || '', query.season, query.episode);
+                this._titleMatchesEpisode(release.title || '', query);
 
             for (const track of tracks) {
                 if (track.forced || !track.languageCode) continue;
-                if (byEpisode && !wholeRelease &&
-                    !this._titleMatchesEpisode(track.fileName || '', query.season, query.episode)) continue;
+                if (byEpisode && !wholeRelease && !this._titleMatchesEpisode(track.fileName || '', query)) continue;
 
                 const dedupKey = `${track.languageCode}:${track.format}:${track.title || ''}`;
                 if (seenLanguageKeys.has(dedupKey)) continue;
@@ -496,7 +532,7 @@ class AnimeToshoProvider extends BaseProvider {
         if (!this._shouldWalk(cacheKey)) return;
         this.stats.xyzWalks++;
 
-        (async () => {
+        this._track(query, (async () => {
             let budget = XYZ_BACKGROUND_DETAILS;
 
             for (let offset = xyzApi.PAGE_SIZE; offset <= XYZ_MAX_OFFSET && budget > 0; offset += xyzApi.PAGE_SIZE) {
@@ -505,7 +541,7 @@ class AnimeToshoProvider extends BaseProvider {
                 if (!page.length) break;
 
                 const named = this._orderXyzReleases(page, query.season)
-                    .filter(r => this._titleMatchesEpisode(r.title || '', query.season, query.episode))
+                    .filter(r => this._titleMatchesEpisode(r.title || '', query))
                     .slice(0, Math.min(budget, XYZ_SEARCH_THRESHOLD));
                 if (!named.length) continue;
 
@@ -518,8 +554,18 @@ class AnimeToshoProvider extends BaseProvider {
                 return;
             }
             log('debug', `[AnimeTosho-XYZ] Background walk found nothing for ${cacheKey}`);
-        })().catch(err => log('debug', `[AnimeTosho-XYZ] Background walk failed: ${err.message}`));
+        })().catch(err => log('debug', `[AnimeTosho-XYZ] Background walk failed: ${err.message}`)));
     }
+}
+
+const normalizeTitle = (s) => String(s || '').toLowerCase().replace(/\(\d{4}\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** Equal titles are the same show; one extending the other by a word is a sequel or spin-off; unrelated spellings are left alone. */
+function namesAnotherShow(title, seriesTitle) {
+    const a = normalizeTitle(title);
+    const b = normalizeTitle(seriesTitle);
+    if (!a || !b || a === b) return false;
+    return a.startsWith(b + ' ') || b.startsWith(a + ' ');
 }
 
 module.exports = AnimeToshoProvider;

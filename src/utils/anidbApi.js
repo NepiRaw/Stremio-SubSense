@@ -48,10 +48,27 @@ async function initAnidbCache(database) {
         CREATE TABLE IF NOT EXISTS anidb_anime_meta (
             anidb_id     INTEGER PRIMARY KEY,
             total_eps    INTEGER,
+            title_main   TEXT,
             fetched_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
+        CREATE TABLE IF NOT EXISTS anidb_cache_meta (
+            key          TEXT PRIMARY KEY,
+            value        TEXT
+        );
     `);
+    await db.execute('ALTER TABLE anidb_anime_meta ADD COLUMN title_main TEXT').catch(() => {});
+    await purgeStaleCache();
     log('info', '[AniDB] Cache tables initialized');
+}
+
+const PARSER_VERSION = '3';
+
+async function purgeStaleCache() {
+    const r = await db.execute("SELECT value FROM anidb_cache_meta WHERE key = 'parser_version'");
+    if (r.rows[0]?.value === PARSER_VERSION) return;
+    await db.executeMultiple('DELETE FROM anidb_episodes; DELETE FROM anidb_anime_meta;');
+    await db.execute({ sql: "INSERT OR REPLACE INTO anidb_cache_meta (key, value) VALUES ('parser_version', ?)", args: [PARSER_VERSION] });
+    log('info', `[AniDB] Episode cache purged for parser v${PARSER_VERSION}`);
 }
 
 /**
@@ -70,16 +87,44 @@ async function getEpisodeId(anidbId, episodeNum) {
         return cached.rows[0].eid;
     }
 
-    const meta = await db.execute(
-        'SELECT fetched_at FROM anidb_anime_meta WHERE anidb_id = ?',
-        [anidbId]
-    );
-    if (meta.rows.length > 0) {
-        return null;
-    }
-
-    const episodes = await fetchFromAnidb(anidbId);
+    const episodes = await loadAnime(anidbId);
     if (!episodes) return null;
+    const match = episodes.find(e => e.epno === episodeNum);
+    return match ? match.eid : null;
+}
+
+/** Regular episode count of an anime, null when AniDB is not configured or the anime is unknown. */
+async function getEpisodeCount(anidbId) {
+    const meta = await animeMeta(anidbId);
+    return meta ? Number(meta.total_eps) || null : null;
+}
+
+/** AniDB main title (romaji), null when AniDB is not configured or the anime is unknown. */
+async function getAnimeTitle(anidbId) {
+    const meta = await animeMeta(anidbId);
+    return meta && meta.title_main ? String(meta.title_main) : null;
+}
+
+async function animeMeta(anidbId) {
+    if (!isAnidbConfigured()) return null;
+    if (!db) throw new Error('AniDB cache not initialized');
+
+    const cached = await db.execute('SELECT total_eps, title_main FROM anidb_anime_meta WHERE anidb_id = ?', [anidbId]);
+    if (cached.rows.length > 0) return cached.rows[0];
+
+    await loadAnime(anidbId);
+    const loaded = await db.execute('SELECT total_eps, title_main FROM anidb_anime_meta WHERE anidb_id = ?', [anidbId]);
+    return loaded.rows[0] || null;
+}
+
+/** Fetch and cache every regular episode once per anime; null when already attempted or unreachable. */
+async function loadAnime(anidbId) {
+    const meta = await db.execute('SELECT fetched_at FROM anidb_anime_meta WHERE anidb_id = ?', [anidbId]);
+    if (meta.rows.length > 0) return null;
+
+    const anime = await fetchFromAnidb(anidbId);
+    if (!anime) return null;
+    const { episodes, title } = anime;
 
     if (episodes.length > 0) {
         const stmts = episodes.map(ep => ({
@@ -90,19 +135,17 @@ async function getEpisodeId(anidbId, episodeNum) {
     }
 
     await db.execute(
-        "INSERT OR REPLACE INTO anidb_anime_meta (anidb_id, total_eps, fetched_at) VALUES (?, ?, strftime('%s','now'))",
-        [anidbId, episodes.length]
+        "INSERT OR REPLACE INTO anidb_anime_meta (anidb_id, total_eps, title_main, fetched_at) VALUES (?, ?, ?, strftime('%s','now'))",
+        [anidbId, episodes.length, title]
     );
 
     log('debug', `[AniDB] Cached ${episodes.length} episodes for aid=${anidbId}`);
-
-    const match = episodes.find(e => e.epno === episodeNum);
-    return match ? match.eid : null;
+    return episodes;
 }
 
 /**
- * Fetch anime episode data from AniDB HTTP API.
- * Returns parsed episodes array or null on error.
+ * Fetch anime data from AniDB HTTP API.
+ * Returns { episodes, title } or null on error.
  */
 function fetchFromAnidb(anidbId) {
     return new Promise((resolve) => {
@@ -126,7 +169,7 @@ function fetchFromAnidb(anidbId) {
 
                 const episodes = parseEpisodes(data);
                 log('debug', `[AniDB] aid=${anidbId}: ${episodes.length} episodes parsed`);
-                resolve(episodes);
+                resolve({ episodes, title: parseMainTitle(data) });
             });
             stream.on('error', (err) => {
                 log('error', `[AniDB] Stream error for aid=${anidbId}: ${err.message}`);
@@ -153,19 +196,23 @@ function fetchFromAnidb(anidbId) {
  */
 function parseEpisodes(xml) {
     const episodes = [];
-    const episodeRegex = /<episode id="(\d+)"[^>]*>[\s\S]*?<epno type="1">(\d+)<\/epno>([\s\S]*?)<\/episode>/g;
+    const blockRegex = /<episode id="(\d+)"[^>]*>([\s\S]*?)<\/episode>/g;
     let match;
-    while ((match = episodeRegex.exec(xml)) !== null) {
-        const eid = parseInt(match[1], 10);
-        const epno = parseInt(match[2], 10);
-        const inner = match[3];
+    while ((match = blockRegex.exec(xml || '')) !== null) {
+        const inner = match[2];
+        const epno = inner.match(/<epno type="1">(\d+)<\/epno>/);
+        if (!epno) continue;
 
         const titleMatch = inner.match(/<title xml:lang="en"[^>]*>(.*?)<\/title>/);
-        const titleEn = titleMatch ? titleMatch[1] : null;
-
-        episodes.push({ eid, epno, titleEn });
+        episodes.push({ eid: parseInt(match[1], 10), epno: parseInt(epno[1], 10), titleEn: titleMatch ? titleMatch[1] : null });
     }
     return episodes;
+}
+
+function parseMainTitle(xml) {
+    const m = String(xml || '').match(/<title[^>]*type="main"[^>]*>([^<]*)<\/title>/);
+    if (!m) return null;
+    return m[1].replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n)).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim() || null;
 }
 
 /**
@@ -180,4 +227,4 @@ async function isAnimeCached(anidbId) {
     return result.rows.length > 0;
 }
 
-module.exports = { initAnidbCache, getEpisodeId, isAnimeCached, isAnidbConfigured };
+module.exports = { initAnidbCache, getEpisodeId, getEpisodeCount, getAnimeTitle, isAnimeCached, isAnidbConfigured, parseEpisodes, parseMainTitle };
