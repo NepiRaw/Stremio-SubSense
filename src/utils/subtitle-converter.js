@@ -152,11 +152,39 @@ function fragmentsToVTTText(slices, styles) {
     return text.trim();
 }
 
+const VTT_TAG = /\\(?:i|b|u)[01]?(?=[\\}])/g;
+
+/**
+ * Drop what VTT cannot render before ass-compiler parses it
+ */
+function stripTypesetting(assContent) {
+    const out = [];
+    for (const line of assContent.split('\n')) {
+        if (line.startsWith('Comment:')) continue;
+        if (!line.startsWith('Dialogue:')) { out.push(line); continue; }
+        const textAt = line.split(',', 9).join(',').length + 1;
+        let drawing = false, hasText = false;
+        const cleaned = line.slice(0, textAt) + line.slice(textAt).replace(/\{[^}]*\}|[^{]+/g, (piece) => {
+            if (piece[0] === '{') {
+                const modes = piece.match(/\\p(\d+)/g);
+                if (modes) drawing = !/\\p0(?![0-9])/.test(modes[modes.length - 1]);
+                const kept = piece.match(VTT_TAG);
+                return kept ? `{${kept.join('')}}` : '';
+            }
+            if (drawing) return '';
+            hasText = true;
+            return piece;
+        });
+        if (hasText) out.push(cleaned);
+    }
+    return out.join('\n');
+}
+
 /**
  * Convert ASS content to VTT format with styling preserved
  * Preserves: bold, italic, underline (both style-level and inline tags)
  * Optionally preserves: alignment/positioning (off by default for Stremio compat)
- * 
+ *
  * @param {string} assContent - Raw ASS subtitle content
  * @param {Object} options - Conversion options
  * @param {boolean} options.enablePositioning - Include VTT positioning (default: false)
@@ -164,7 +192,7 @@ function fragmentsToVTTText(slices, styles) {
  */
 function convertAssToVtt(assContent, options = {}) {
     const { enablePositioning = false } = options;
-    const compiled = compile(assContent);
+    const compiled = compile(stripTypesetting(assContent));
     
     let vtt = 'WEBVTT\n\n';
     let captionCount = 0;
@@ -330,5 +358,6 @@ module.exports = {
     convertToSrt,
     convertSubtitle,
     convertAssToVtt,
+    stripTypesetting,
     isAssFormat
 };

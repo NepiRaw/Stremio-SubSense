@@ -159,6 +159,7 @@ function installShutdownHandlers(server) {
 function runPrimary() {
     log('info', `[primary] starting ${WEB_CONCURRENCY} workers on pid ${process.pid}`);
     installWarpRotationHost();
+    process.env.SUBSENSE_STARTED_AT = String(Date.now());
     for (let i = 0; i < WEB_CONCURRENCY; i++) cluster.fork();
 
     let shuttingDown = false;
@@ -166,7 +167,7 @@ function runPrimary() {
     cluster.on('exit', (worker, code, signal) => {
         if (shuttingDown) return;
         log('warn', `[primary] worker ${worker.process.pid} exited (${signal || 'code ' + code}), replacing in ${REFORK_DELAY_MS}ms`);
-        setTimeout(() => { if (!shuttingDown) cluster.fork(); }, REFORK_DELAY_MS).unref();
+        setTimeout(() => { if (!shuttingDown) cluster.fork(); }, REFORK_DELAY_MS);
     });
 
     cluster.on('online', (worker) => log('debug', `[primary] worker ${worker.process.pid} online`));

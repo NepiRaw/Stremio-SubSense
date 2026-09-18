@@ -17,19 +17,25 @@ const KEY_LENGTH = 32;
  * Get encryption key from environment or derive from passphrase
  * @returns {Buffer} 32-byte encryption key
  */
+let derivedKey = null;
+let derivedFrom = null;
+
 function getEncryptionKey() {
     const envKey = process.env.SUBSENSE_ENCRYPTION_KEY;
-    
+
     if (!envKey) {
         throw new Error('SUBSENSE_ENCRYPTION_KEY environment variable is required for encryption');
     }
-    
+
     if (/^[a-fA-F0-9]{64}$/.test(envKey)) {
         return Buffer.from(envKey, 'hex');
     }
-    
-    const salt = 'subsense-config-v1';
-    return crypto.pbkdf2Sync(envKey, salt, 100000, KEY_LENGTH, 'sha256');
+
+    if (derivedFrom !== envKey) {
+        derivedKey = crypto.pbkdf2Sync(envKey, 'subsense-config-v1', 100000, KEY_LENGTH, 'sha256');
+        derivedFrom = envKey;
+    }
+    return derivedKey;
 }
 
 /**

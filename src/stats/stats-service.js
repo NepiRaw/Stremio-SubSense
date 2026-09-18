@@ -24,7 +24,7 @@ function toAlpha3B(code) {
 const HISTORY_LIMIT = 100;
 
 const stats = {
-    startedAt: new Date(),
+    startedAt: new Date(Number(process.env.SUBSENSE_STARTED_AT) || Date.now()),
     requests: { total: 0, movie: 0, series: 0, byDate: {} },
     subtitles: { total: 0, bySource: {}, byLanguage: {} },
     languageMatching: { totalRequests: 0, found: 0, notFound: 0, byLanguageSuccess: {} },
