@@ -61,6 +61,18 @@ const SELF_ORIGIN = (() => {
     } catch (_) { return null; }
 })();
 
+// Where this process answers directly. An own-origin target connects here instead of going out
+// through the public edge and back; the URL, its guards and the Host header are untouched.
+const LOOPBACK = (() => {
+    const publicHost = SELF_ORIGIN ? new URL(SELF_ORIGIN).hostname : '';
+    if (!publicHost || net.isIP(publicHost) || publicHost === 'localhost') return null;
+    const host = (process.env.HOST || '').trim();
+    const port = parseInt(process.env.PORT, 10) || 3100;
+    if (!host || host === '0.0.0.0' || host === '::' || host === 'localhost') return { hostname: '127.0.0.1', port };
+    if (net.isIP(host)) return { hostname: host, port };
+    return null;
+})();
+
 const isSubtitleDomain = (host) => SUBTITLE_DOMAINS.some(d => host === d || host.endsWith('.' + d));
 
 const ipv4ToInt = (ip) => ip.split('.').reduce((n, o) => (n << 8) + (+o), 0) >>> 0;
@@ -110,7 +122,10 @@ function guardedConnector(restrictToSubtitleHosts) {
         const hostname = options.hostname || '';
         const port = String(options.port || (options.protocol === 'https:' ? 443 : 80));
         if (restrictToSubtitleHosts) {
-            if (isSelfTarget(hostname, port)) return plainConnector(options, callback);
+            if (isSelfTarget(hostname, port)) {
+                if (LOOPBACK) return plainConnector({ ...options, protocol: 'http:', ...LOOPBACK }, callback);
+                return plainConnector(options, callback);
+            }
             if (!isSubtitleDomain(hostname)) return callback(new Error(`host not allowed (${hostname})`));
         }
         const literal = ipLiteral(hostname);
