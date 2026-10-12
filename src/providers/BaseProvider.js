@@ -114,6 +114,7 @@ class SubtitleResult {
         downloadCount = null,
         display = '',    // Display name (e.g., 'English', 'French')
         trackName = null, // MKV track name (e.g., 'VO ASS - Français')
+        verifiedEpisodeImdbId = null, // Exact episode identity for cached OpenSubtitles rows
 
         // Format hints - provider indicates what format the subtitle is in
         format = null,          // Detected/assumed format: 'srt', 'ass', 'ssa', 'vtt', 'unknown'
@@ -133,6 +134,7 @@ class SubtitleResult {
         this.downloadCount = downloadCount;
         this.display = display;
         this.trackName = trackName;
+        this.verifiedEpisodeImdbId = verifiedEpisodeImdbId;
 
         this.format = format;
         this.needsConversion = needsConversion;

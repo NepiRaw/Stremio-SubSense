@@ -8,6 +8,8 @@ const inflight = require('../cache/inflight');
 const metrics = require('../infra/metrics');
 const { prioritizeByLanguage, buildEntries } = require('../utils/format');
 const { validateWyzieUrls } = require('../utils/validateWyzie');
+const { resolveEpisodeIdentity } = require('../utils/episodeIdentity');
+const { filterCachedEpisodeSubtitles, isOpenSubtitles } = require('../utils/episodeCache');
 const { statsService, track } = require('../stats');
 
 let encryptConfig = null;
@@ -20,6 +22,7 @@ try {
 const STREMIO_UA_RE = /stremio|com\.stremio|libmpv/i;
 const OS_DIRECT_URL_RE = /^https?:\/\/dl\.opensubtitles\.org\//;
 const OS_PROXIED_URL_RE = /\/api\/subtitle\/(?:vtt|srt|ass)\/(https?:\/\/dl\.opensubtitles\.org\/[^\s]+)/;
+const CACHE_IDENTITY_TIMEOUT_MS = 1500;
 
 function isStremioClient(userAgent) {
     return STREMIO_UA_RE.test(userAgent || '');
@@ -60,9 +63,9 @@ function applyStreamingServerWrap(subtitles, userAgent) {
 /**
  * Resolve a subtitle request.
  *
- * L1 (Redis) -> L2 (cache.db) -> providers. A hit reads no SQLite and calls no upstream:
- * dead-URL filtering happens when an entry is written, not when it is served. Persistence
- * and stats are never awaited before responding.
+ * L1 (Redis) -> L2 (cache.db) -> providers. Cached OpenSubtitles series rows are
+ * identity-checked before serving; all other cached providers retain the fast path.
+ * Persistence and stats are never awaited before responding.
  */
 async function handleSubtitlesRequest(args, parsedConfig) {
     const startedAt = Date.now();
@@ -94,23 +97,39 @@ async function handleSubtitlesRequest(args, parsedConfig) {
 
     const cached = await l1.get(cacheKey, requestContext);
     if (cached) {
-        metrics.recordCache('l1');
-        log('info', `[handler] cache-${cached.status} ${reqTag(parsed, languages)} -> ${cached.subtitles.length} subs in ${Date.now() - startedAt}ms`);
-        if (cached.status === 'stale') {
-            scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
+        const checked = await checkCachedSubtitles(cached.subtitles, parsed);
+        if (checked.unsafeCount > 0) {
+            await l1.del(cacheKey);
+            log('warn', `[handler] dropped ${checked.unsafeCount} unverified cached OpenSubtitles rows for ${reqTag(parsed, languages)}`);
         }
-        fireTrack(parsedConfig, parsed, languages, cached.subtitles, Date.now() - startedAt, true);
-        return { subtitles: applyStreamingServerWrap(cached.subtitles, userAgent) };
+        if (checked.subtitles.length > 0) {
+            metrics.recordCache('l1');
+            log('info', `[handler] cache-${cached.status} ${reqTag(parsed, languages)} -> ${checked.subtitles.length} subs in ${Date.now() - startedAt}ms`);
+            if (cached.status === 'stale' || checked.unsafeCount > 0) {
+                scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
+            }
+            fireTrack(parsedConfig, parsed, languages, checked.subtitles, Date.now() - startedAt, true);
+            return { subtitles: applyStreamingServerWrap(checked.subtitles, userAgent) };
+        }
     }
 
     const l2Hit = await l2.getByContent(parsed.imdbId, parsed.season, parsed.episode, languages);
     if (l2Hit && l2Hit.subtitles.length > 0) {
-        metrics.recordCache('l2');
-        l1.set(cacheKey, l2Hit.subtitles).catch(() => {});
-        const returned = l1.materialize(l2Hit.subtitles, requestContext);
-        log('info', `[handler] l2-hit ${reqTag(parsed, languages)} -> ${l2Hit.subtitles.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
-        fireTrack(parsedConfig, parsed, languages, returned, Date.now() - startedAt, true);
-        return { subtitles: applyStreamingServerWrap(returned, userAgent) };
+        const checked = await checkCachedSubtitles(l2Hit.subtitles, parsed);
+        if (checked.unsafeCount > 0) {
+            log('warn', `[handler] dropped ${checked.unsafeCount} unverified L2 OpenSubtitles rows for ${reqTag(parsed, languages)}`);
+        }
+        if (checked.subtitles.length > 0) {
+            metrics.recordCache('l2');
+            l1.set(cacheKey, checked.subtitles).catch(() => {});
+            const returned = l1.materialize(checked.subtitles, requestContext);
+            log('info', `[handler] l2-hit ${reqTag(parsed, languages)} -> ${checked.subtitles.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
+            if (checked.unsafeCount > 0) {
+                scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
+            }
+            fireTrack(parsedConfig, parsed, languages, returned, Date.now() - startedAt, true);
+            return { subtitles: applyStreamingServerWrap(returned, userAgent) };
+        }
     }
 
     // Another worker may already be fetching this key; wait for its result rather than duplicating.
@@ -118,10 +137,17 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     if (!owned) {
         const waited = await inflight.pollFor(() => l1.get(cacheKey, requestContext));
         if (waited) {
-            metrics.recordCache('l1');
-            log('info', `[handler] dedup-wait ${reqTag(parsed, languages)} -> ${waited.subtitles.length} subs in ${Date.now() - startedAt}ms`);
-            fireTrack(parsedConfig, parsed, languages, waited.subtitles, Date.now() - startedAt, true);
-            return { subtitles: applyStreamingServerWrap(waited.subtitles, userAgent) };
+            const checked = await checkCachedSubtitles(waited.subtitles, parsed);
+            if (checked.unsafeCount > 0) await l1.del(cacheKey);
+            if (checked.subtitles.length > 0) {
+                metrics.recordCache('l1');
+                log('info', `[handler] dedup-wait ${reqTag(parsed, languages)} -> ${checked.subtitles.length} subs in ${Date.now() - startedAt}ms`);
+                if (checked.unsafeCount > 0) {
+                    scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
+                }
+                fireTrack(parsedConfig, parsed, languages, checked.subtitles, Date.now() - startedAt, true);
+                return { subtitles: applyStreamingServerWrap(checked.subtitles, userAgent) };
+            }
         }
     }
 
@@ -156,6 +182,31 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     } finally {
         if (owned) inflight.release(cacheKey).catch(() => {});
     }
+}
+
+async function checkCachedSubtitles(subtitles, parsed) {
+    if (parsed.type !== 'series' || !subtitles.some(isOpenSubtitles)) {
+        return { subtitles, unsafeCount: 0 };
+    }
+    const resolution = resolveEpisodeIdentity({
+        imdbId: parsed.imdbId,
+        season: parsed.season,
+        episode: parsed.episode,
+        type: parsed.type
+    });
+    const identity = await withTimeout(resolution, CACHE_IDENTITY_TIMEOUT_MS, {
+        status: 'unresolved',
+        reason: 'cache-identity-timeout'
+    });
+    return filterCachedEpisodeSubtitles(subtitles, parsed.type, identity);
+}
+
+function withTimeout(promise, timeoutMs, fallback) {
+    let timer;
+    const timeout = new Promise(resolve => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function fireTrack(parsedConfig, parsed, languages, subtitles, fetchTimeMs, cacheHit, languageMatch) {

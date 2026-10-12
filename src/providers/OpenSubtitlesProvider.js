@@ -4,6 +4,11 @@ const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const rateLimit = require('../infra/rate-limit');
 const { log } = require('../utils');
 const { toAlpha2, toAlpha3B, getDisplayName, getByAnyCode } = require('../languages');
+const {
+    resolveEpisodeIdentity,
+    normalizeImdbId,
+    normalizeTitle
+} = require('../utils/episodeIdentity');
 
 const BASE_URL = 'https://rest.opensubtitles.org';
 const USER_AGENT = 'VLSub 0.10.3';
@@ -53,12 +58,26 @@ class OpenSubtitlesProvider extends BaseProvider {
         const { imdbId, season, episode, languages } = query;
         if (!imdbId) return [];
 
-        const numericId = imdbId.replace(/^tt/, '');
+        const isEpisode = season != null && episode != null;
+        let identity = query.episodeIdentity;
+        if (isEpisode && !identity) {
+            identity = await resolveEpisodeIdentity({
+                imdbId,
+                season,
+                episode,
+                type: query.type || query.contentType || 'series'
+            });
+        }
+        if (isEpisode && identity?.status !== 'resolved') {
+            log('warn', `[OpenSubtitlesProvider] Episode identity unresolved for ${imdbId} S${season}E${episode}`);
+            return [];
+        }
+
+        const lookupId = isEpisode ? normalizeImdbId(identity.episodeImdbId) : imdbId;
+        if (isEpisode && !lookupId) return [];
+        const numericId = lookupId.replace(/^tt/, '');
 
         let searchPath = `/search/imdbid-${numericId}`;
-        if (season != null && episode != null) {
-            searchPath = `/search/episode-${episode}/imdbid-${numericId}/season-${season}`;
-        }
 
         // Add language filter if only 1 language requested (server-side filtering)
         // The legacy API only supports a single sublanguageid per request
@@ -98,6 +117,8 @@ class OpenSubtitlesProvider extends BaseProvider {
         const seenIds = new Set();
 
         for (const entry of data) {
+            if (isEpisode && !this._matchesEpisodeIdentity(entry, identity)) continue;
+
             const id = entry.IDSubtitleFile;
             if (!id || seenIds.has(id)) continue;
             seenIds.add(id);
@@ -133,12 +154,30 @@ class OpenSubtitlesProvider extends BaseProvider {
                 downloadCount: parseInt(entry.SubDownloadsCnt) || null,
                 display: langEntry ? langEntry.name : getDisplayName(iso639),
                 format: fmt,
-                needsConversion: false
+                needsConversion: false,
+                verifiedEpisodeImdbId: isEpisode ? identity.episodeImdbId : null
             }));
         }
 
         log('info', `[OpenSubtitlesProvider] ${imdbId} S${season || '-'}E${episode || '-'}: ${results.length} subtitles`);
         return results;
+    }
+
+    _matchesEpisodeIdentity(entry, identity) {
+        if (!entry || !identity) return false;
+        if (normalizeImdbId(entry.IDMovieImdb) !== normalizeImdbId(identity.episodeImdbId)) return false;
+        if (normalizeImdbId(entry.SeriesIMDBParent) !== normalizeImdbId(identity.seriesImdbId)) return false;
+        if (String(entry.MovieKind || '').trim().toLowerCase() !== 'episode') return false;
+
+        const titles = Array.isArray(identity.expectedTitles) && identity.expectedTitles.length > 0
+            ? identity.expectedTitles
+            : [identity.expectedTitle];
+        const expectedNames = new Set(titles
+            .map(title => normalizeTitle(`${identity.expectedSeriesTitle} ${title}`))
+            .filter(Boolean));
+        if (expectedNames.size === 0) return false;
+        return [entry.MovieName, entry.MovieNameEng]
+            .some(name => expectedNames.has(normalizeTitle(name)));
     }
 
     /**

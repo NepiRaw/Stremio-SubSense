@@ -126,6 +126,7 @@ function buildEntries(subtitles, opts = {}) {
         if (declared === 'hi') meta.h = 1;
         if (declared === 'forced') meta.x = 1;
         if (sub.trackName) meta.t = sub.trackName;
+        if (sub.verifiedEpisodeImdbId) meta.e = sub.verifiedEpisodeImdbId;
 
         const emit = (fmt, url) => out.push({ url, lang, source, f: (fmt || 'srt').toLowerCase(), ...meta });
 
@@ -160,7 +161,9 @@ function buildEntries(subtitles, opts = {}) {
 function renderEntries(entries) {
     return entries.map((entry, idx) => {
         if (entry.label !== undefined) {
-            return entry.id ? { ...entry, id: String(entry.id).replace(/-\d+$/, `-${idx}`) } : entry;
+            const out = entry.id ? { ...entry, id: String(entry.id).replace(/-\d+$/, `-${idx}`) } : { ...entry };
+            if (entry.e && !out.verifiedEpisodeImdbId) out.verifiedEpisodeImdbId = entry.e;
+            return out;
         }
         const base = entry.n || entry.r || '';
         const name = entry.t ? (base ? `${base} · ${entry.t}` : entry.t) : base;
@@ -174,6 +177,7 @@ function renderEntries(entries) {
         if (entry.n) out.fileName = entry.n;
         if (entry.r) out.releaseName = entry.r;
         if (entry.R) out.releases = entry.R;
+        if (entry.e) out.verifiedEpisodeImdbId = entry.e;
         return out;
     });
 }
