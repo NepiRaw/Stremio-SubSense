@@ -273,7 +273,7 @@ function sendCached(res, entry, cacheState) {
  */
 function safeHeader(value) {
     if (value == null) return '';
-    return String(value).replace(/[^\x20-\x7E]/g, (ch) => encodeURIComponent(ch));
+    return String(value).replace(/[^\x20-\x7E]/gu, (ch) => encodeURIComponent(ch));
 }
 
 function resolveEntry(cacheKey, build) {
