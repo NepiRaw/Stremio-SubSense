@@ -51,7 +51,7 @@ const PRIVATE_V4 = [
 const SUBTITLE_DOMAINS = [
     'wyzie.io', 'betaseries.com', 'opensubtitles.org', 'opensubtitles.com',
     'subdl.com', 'subsource.net', 'yts-subs.com', 'tvsubtitles.net',
-    'gestdown.info', 'animetosho.org', 'animetosho.xyz', 'subf2m.co',
+    'gestdown.info', 'animetosho.org', 'animetosho.xyz', 'animetosho.net', 'subf2m.co',
     'addic7ed.com', 'podnapisi.com', 'jimaku.cc', 'kitsunekko.net', 'indexsubtitle.cc'
 ];
 
@@ -805,14 +805,14 @@ async function fetchAnimetosho(hexId, fmt = 'vtt') {
 }
 
 // =====================================================
-// AnimeTosho XYZ subtitle proxy (storage.animetosho.xyz)
+// AnimeTosho XYZ subtitle proxy (storage.animetosho.net, formerly .xyz)
 // =====================================================
 
 const { decodeProxyToken, storageUrlForPath } = require('../utils/animetoshoXyzApi');
 
 /**
  * AnimeTosho XYZ subtitle proxy.
- * Downloads XZ-compressed subtitle from storage.animetosho.xyz, decompresses, converts.
+ * Downloads XZ-compressed subtitle from storage.animetosho.net, decompresses, converts.
  * The token encodes the attachment id and the storage path the feed payload gave us.
  *
  * GET /api/animetosho-xyz/proxy/:token?fmt=vtt|ass|srt

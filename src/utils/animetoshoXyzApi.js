@@ -3,20 +3,23 @@
 /**
  * AnimeTosho XYZ (v1) API wrapper.
  *
- * feed.animetosho.xyz lists the releases of an AniDB anime id, and ?show=torrent on a release
+ * feed.animetosho.net lists the releases of an AniDB anime id, and ?show=torrent on a release
  * returns every file with its subtitle attachments. Each attachment already carries a language
  * code, a format and a working storage URL, so nothing has to be read out of mediainfo.
  *
  * Flow:
  *   1. /json/v1/series/anidb/{aid}  -> releases for the series, 100 per page, ?offset walks back
  *   2. /json?show=torrent&id=X      -> files, each with attachments[]
- *   3. storage.animetosho.xyz/...xz  -> the subtitle itself, in one of two path shapes
+ *   3. storage.animetosho.net/...xz  -> the subtitle itself, in one of two path shapes
  */
 
 const { log } = require('../utils');
 
-const XYZ_FEED_URL = 'https://feed.animetosho.xyz/json';
-const XYZ_STORAGE_URL = 'https://storage.animetosho.xyz';
+const XYZ_FEED_URL = 'https://feed.animetosho.net/json';
+const XYZ_STORAGE_URL = 'https://storage.animetosho.net';
+// AnimeTosho moved from .xyz to .net and redirects the old names; tokens issued before the move,
+// and listings cached since, carry either origin.
+const STORAGE_ORIGIN = /^https:\/\/storage\.animetosho\.(?:net|xyz)\//;
 const PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = 15000;
 const USER_AGENT = 'SubSense-Stremio/2.0';
@@ -133,7 +136,7 @@ function countMediainfoTracks(detail) {
 
 /** The token carries the attachment id and its storage path, which is all the proxy needs. */
 function buildProxyUrl(baseUrl, subtitle, fmt) {
-    const path = String(subtitle.url).replace(`${XYZ_STORAGE_URL}/`, '');
+    const path = String(subtitle.url).replace(STORAGE_ORIGIN, '');
     const payload = JSON.stringify({ i: subtitle.id, p: path });
     const encoded = Buffer.from(payload).toString('base64url');
     return `${baseUrl}/api/animetosho-xyz/proxy/${encoded}?fmt=${fmt}`;
@@ -153,7 +156,7 @@ function decodeProxyToken(token) {
  * guard pins the host instead of matching a shape.
  */
 function storageUrlForPath(path) {
-    const p = String(path || '');
+    const p = String(path || '').replace(STORAGE_ORIGIN, '');
     if (!p || p.startsWith('/') || p.includes('://') || p.includes('..') || p.includes('\\')) return null;
     if (!p.toLowerCase().endsWith('.xz')) return null;
     return `${XYZ_STORAGE_URL}/${p}`;
