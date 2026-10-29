@@ -49,6 +49,7 @@ services:
       - STATS_DB_PATH=/app/data/subsense-stats.db
       - META_DB_PATH=/app/data/subsense-meta.db
       # - L2_TTL_DAYS=7                        # Subtitle cache retention
+      # - L2_REFRESH_AFTER_HOURS=24            # Subtitle cache hits older than this are refreshed in the background
 
       # --- Redis ---
       - REDIS_URL=redis://subsense-redis:6379

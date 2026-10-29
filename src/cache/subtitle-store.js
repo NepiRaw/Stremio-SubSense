@@ -17,6 +17,7 @@ function intEnv(name, fallback) {
 }
 
 const TTL_SECONDS = intEnv('L2_TTL_DAYS', 7) * DAY_S;
+const REFRESH_AFTER_SECONDS = intEnv('L2_REFRESH_AFTER_HOURS', 24) * 60 * 60;
 
 function buildLangKey(languages) {
     return (languages || []).slice().sort().join(',');
@@ -66,16 +67,14 @@ async function getByContent(imdbId, season, episode, languages) {
         const wanted = (languages || []).filter(Boolean);
         const seenUrls = new Set();
         const merged = [];
-        let minAge = Infinity;
+        let ageSeconds = 0;
 
         for (const row of result.rows) {
-            const age = Number(row.age_seconds) || 0;
-            if (age < minAge) minAge = age;
-
             let subs;
             try { subs = JSON.parse(row.subtitles); } catch { continue; }
             if (!Array.isArray(subs)) continue;
 
+            const before = merged.length;
             for (const sub of subs) {
                 if (!sub.url || seenUrls.has(sub.url)) continue;
                 if (sub.lang && wanted.some(l => sameLanguage(l, sub.lang))) {
@@ -83,10 +82,11 @@ async function getByContent(imdbId, season, episode, languages) {
                     merged.push(sub);
                 }
             }
+            if (merged.length > before) ageSeconds = Math.max(ageSeconds, Number(row.age_seconds) || 0);
         }
 
         if (merged.length === 0) return null;
-        return { subtitles: merged, ageSeconds: minAge };
+        return { subtitles: merged, ageSeconds };
     } catch (err) {
         log('error', `[L2] getByContent failed: ${err.message}`);
         return null;
@@ -192,5 +192,5 @@ async function count() {
 module.exports = {
     buildLangKey, get, getByContent, set, countsOf,
     deleteExpiredBatch, selectExpiredBatch, deleteByRowIds,
-    countExpired, count, TTL_SECONDS
+    countExpired, count, TTL_SECONDS, REFRESH_AFTER_SECONDS
 };

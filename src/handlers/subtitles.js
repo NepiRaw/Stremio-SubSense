@@ -107,6 +107,9 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     if (l2Hit && l2Hit.subtitles.length > 0) {
         metrics.recordCache('l2');
         l1.set(cacheKey, l2Hit.subtitles).catch(() => {});
+        if (l2Hit.ageSeconds > l2.REFRESH_AFTER_SECONDS) {
+            scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey);
+        }
         const returned = l1.materialize(l2Hit.subtitles, requestContext);
         log('info', `[handler] l2-hit ${reqTag(parsed, languages)} -> ${l2Hit.subtitles.length} subs (returning ${returned.length}) in ${Date.now() - startedAt}ms`);
         fireTrack(parsedConfig, parsed, languages, returned, Date.now() - startedAt, true);

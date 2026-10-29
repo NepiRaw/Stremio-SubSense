@@ -197,6 +197,7 @@ Access your addon at `http://localhost:3100`
 | `L1_TTL_HOURS` | Optional | `6` | Redis response cache TTL |
 | `L1_STALE_AFTER_HOURS` | Optional | `2` | Age at which a hit is served but refreshed in the background |
 | `L2_TTL_DAYS` | Optional | `7` | Subtitle cache retention |
+| `L2_REFRESH_AFTER_HOURS` | Optional | `24` | Age at which a subtitle cache hit is served but refreshed in the background |
 | `PROVIDER_DEADLINE_MS` | Optional | `8000` | Soft provider fan-out deadline. See the note below |
 | `PROXY_CACHE_MAX_BYTES` | Optional | `268435456` | Byte cap on the in-memory subtitle body cache |
 | `STATS_ENABLED` | Optional | `true` | `true`, `minimal` or `false`. See the note below |
