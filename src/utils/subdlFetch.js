@@ -3,6 +3,7 @@
 const { log } = require('../utils');
 const { forceWarpFetch, isWarpAvailable } = require('./warpFetch');
 const { requestWarpRotation } = require('./warpRotation');
+const { safe } = require('../infra/redis');
 
 // Rate limiter: serial queue with token bucket + minimum spacing
 const MAX_TOKENS = 5;
@@ -123,4 +124,22 @@ function getSubdlFetchStats() {
     };
 }
 
-module.exports = { subdlFetch, getSubdlFetchStats };
+const MISS_PREFIX = 'ss:subdl-miss:';
+const MISS_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+function missKey(path, season, episode, track) {
+    return `${MISS_PREFIX}${path}:${season}:${episode}:${track || 'plain'}`;
+}
+
+function recordArchiveMiss(path, season, episode, track) {
+    return safe(r => r.set(missKey(path, season, episode, track), '1', 'EX', MISS_TTL_SECONDS));
+}
+
+/** One boolean per [path, season, episode, track]; all false when Redis is unavailable. */
+async function archiveMisses(keys) {
+    if (!keys.length) return [];
+    const values = await safe(r => r.mget(keys.map(k => missKey(...k))), null);
+    return keys.map((_, i) => !!(values && values[i]));
+}
+
+module.exports = { subdlFetch, getSubdlFetchStats, recordArchiveMiss, archiveMisses };

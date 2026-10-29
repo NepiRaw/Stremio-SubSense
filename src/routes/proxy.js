@@ -25,7 +25,7 @@ const { Agent, buildConnector, setGlobalDispatcher } = require('undici');
 
 const { log } = require('../../src/utils');
 const { warpFetch } = require('../utils/warpFetch');
-const { subdlFetch } = require('../utils/subdlFetch');
+const { subdlFetch, recordArchiveMiss } = require('../utils/subdlFetch');
 const { redis, isHealthy, safe } = require('../infra/redis');
 const {
     extractSubtitleEntries,
@@ -700,6 +700,7 @@ async function fetchSubdl(subdlPath, { season, episode, filename, track, fmt = '
 
     const selected = selectSubtitleEntry(entries, { season, episode, filename, track });
     if (!selected) {
+        if (season && episode) await recordArchiveMiss(subdlPath, season, episode, track);
         const err = new Error('No matching subtitle in SubDL archive');
         err.status = 404;
         throw err;

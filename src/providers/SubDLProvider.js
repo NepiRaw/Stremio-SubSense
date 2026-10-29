@@ -5,6 +5,7 @@ const { log } = require('../utils');
 const { toSubdlCode, getBySubdlCode, toAlpha3B, getDisplayName } = require('../languages');
 const mediaParser = require('../utils/mediaParser');
 const { declaredTrack } = require('../utils/trackType');
+const { archiveMisses } = require('../utils/subdlFetch');
 
 const API_BASE = 'https://api.subdl.com/api/v1';
 
@@ -151,6 +152,9 @@ class SubDLProvider extends BaseProvider {
 
         if (season != null && episode != null) {
             allSubs = allSubs.filter(sub => this._matchesEpisode(sub, season, episode));
+            const missed = await archiveMisses(allSubs.map(sub =>
+                [this._archivePath(sub), season, episode, this._declaredTrack(sub)]));
+            allSubs = allSubs.filter((_, i) => !missed[i]);
         }
 
         return allSubs.map(sub => this._toSubtitleResult(sub, {
@@ -255,10 +259,9 @@ class SubDLProvider extends BaseProvider {
 
         // Build proxy URL (SubDL downloads are public, no API key needed)
         const releaseName = sub.release_name || sub.name || '';
-        // A pack holds several tracks per episode; `track` tells the proxy which one this line is.
-        const track = declaredTrack(releaseName, !!sub.hi);
+        const track = this._declaredTrack(sub);
 
-        const encodedUrl = encodeURIComponent((sub.url || '').replace(/^\/+/, ''));
+        const encodedUrl = encodeURIComponent(this._archivePath(sub));
         const params = new URLSearchParams();
         if (season != null) params.set('season', String(season));
         if (episode != null) params.set('episode', String(episode));
@@ -290,6 +293,15 @@ class SubDLProvider extends BaseProvider {
             format: 'srt',
             needsConversion: false
         });
+    }
+
+    _archivePath(sub) {
+        return (sub.url || '').replace(/^\/+/, '');
+    }
+
+    // A pack holds several tracks per episode; `track` tells the proxy which one this line is.
+    _declaredTrack(sub) {
+        return declaredTrack(sub.release_name || sub.name || '', !!sub.hi);
     }
 
     _subtitleIdFromUrl(url) {
