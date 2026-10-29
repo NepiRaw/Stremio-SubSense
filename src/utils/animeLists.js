@@ -33,10 +33,13 @@ function imdbIdsOf(entry) {
     return list.map(v => String(v).trim()).filter(v => v.startsWith('tt'));
 }
 
-/** Upstream sends episode_offset as a number or, like season, as a per-source object. */
+/**
+ * Upstream sends episode_offset as a number or, like season, as a per-source object. Only the TVDB offset
+ * applies: seasons are matched on TVDB, and a TMDB offset counts episodes in another numbering.
+ */
 function episodeOffsetOf(entry) {
     const raw = entry.episode_offset;
-    const value = raw && typeof raw === 'object' ? (raw.tvdb ?? raw.tmdb) : raw;
+    const value = raw && typeof raw === 'object' ? raw.tvdb : raw;
     const num = Number(value);
     return Number.isFinite(num) ? num : 0;
 }

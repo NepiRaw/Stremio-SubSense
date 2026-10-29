@@ -58,8 +58,17 @@ async function resolveAbsoluteEpisode({ imdbId, season, episode, anidbId, covere
     return index === -1 ? null : index + 1;
 }
 
+/** Air year and title Cinemeta gives the episode, or null when it lists no such episode. */
+async function cinemetaEpisode(imdbId, season, episode) {
+    const videos = await cinemetaVideos(imdbId);
+    const video = videos && videos.find(v => v.season === season && (v.episode ?? v.number) === episode);
+    if (!video) return null;
+    const aired = video.firstAired || video.released;
+    return { year: aired ? new Date(aired).getUTCFullYear() : null, name: video.name || video.title || '' };
+}
+
 function _resetCache() {
     videosCache.clear();
 }
 
-module.exports = { resolveAbsoluteEpisode, _resetCache };
+module.exports = { resolveAbsoluteEpisode, cinemetaEpisode, _resetCache };

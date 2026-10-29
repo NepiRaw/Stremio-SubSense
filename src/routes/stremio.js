@@ -106,11 +106,19 @@ function parseExtra(extra) {
     for (const part of extra.split('&')) {
         const eq = part.indexOf('=');
         if (eq === -1) continue;
-        const k = decodeURIComponent(part.slice(0, eq));
-        const v = decodeURIComponent(part.slice(eq + 1));
+        const k = safeDecode(part.slice(0, eq));
+        const v = safeDecode(part.slice(eq + 1));
         out[k] = v;
     }
     return out;
+}
+
+function safeDecode(value) {
+    try {
+        return decodeURIComponent(value);
+    } catch (_) {
+        return value;
+    }
 }
 
 function setStremioHeaders(res) {

@@ -4,6 +4,8 @@ const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const rateLimit = require('../infra/rate-limit');
 const { log } = require('../utils');
 const { toAlpha2, toAlpha3B, getDisplayName, getByAnyCode } = require('../languages');
+const { isAnime } = require('../utils/animeLists');
+const { cinemetaEpisode } = require('../utils/absoluteEpisode');
 
 const BASE_URL = 'https://rest.opensubtitles.org';
 const USER_AGENT = 'VLSub 0.10.3';
@@ -54,9 +56,13 @@ class OpenSubtitlesProvider extends BaseProvider {
         if (!imdbId) return [];
 
         const numericId = imdbId.replace(/^tt/, '');
+        const isEpisode = season != null && episode != null;
+        const expectedPromise = isEpisode && isAnime(imdbId)
+            ? cinemetaEpisode(imdbId, season, episode).catch(() => null)
+            : null;
 
         let searchPath = `/search/imdbid-${numericId}`;
-        if (season != null && episode != null) {
+        if (isEpisode) {
             searchPath = `/search/episode-${episode}/imdbid-${numericId}/season-${season}`;
         }
 
@@ -94,10 +100,16 @@ class OpenSubtitlesProvider extends BaseProvider {
         const data = await response.json();
         if (!Array.isArray(data)) return [];
 
+        const expected = expectedPromise ? await expectedPromise : null;
         const results = [];
         const seenIds = new Set();
+        let otherEpisodes = 0;
 
         for (const entry of data) {
+            if (expected && isOtherEpisode(entry, expected)) {
+                otherEpisodes++;
+                continue;
+            }
             const id = entry.IDSubtitleFile;
             if (!id || seenIds.has(id)) continue;
             seenIds.add(id);
@@ -137,7 +149,8 @@ class OpenSubtitlesProvider extends BaseProvider {
             }));
         }
 
-        log('info', `[OpenSubtitlesProvider] ${imdbId} S${season || '-'}E${episode || '-'}: ${results.length} subtitles`);
+        const dropped = otherEpisodes ? ` (${otherEpisodes} rows of another episode dropped)` : '';
+        log('info', `[OpenSubtitlesProvider] ${imdbId} S${season || '-'}E${episode || '-'}: ${results.length} subtitles${dropped}`);
         return results;
     }
 
@@ -184,6 +197,17 @@ class OpenSubtitlesProvider extends BaseProvider {
         await rateLimit.throttle('opensubtitles', REQUEST_DELAY_MS);
         this._lastRequestAt = Date.now();
     }
+}
+
+const normalizeTitle = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
+
+function isOtherEpisode(entry, expected) {
+    const year = Number(entry.MovieYear);
+    if (!year || !expected.year || year === expected.year) return false;
+    const want = normalizeTitle(expected.name);
+    const got = normalizeTitle(String(entry.MovieName || '').replace(/^"[^"]*"\s*/, ''));
+    if (!want || !got || /^episode \d+$/.test(want)) return false;
+    return !(want.includes(got) || got.includes(want));
 }
 
 module.exports = OpenSubtitlesProvider;
