@@ -181,14 +181,14 @@ Access your addon at `http://localhost:3100`
 | `PORT` | Optional | `3100` | Server port exposed by the addon |
 | `SUBSENSE_BASE_URL` | Optional | Auto-detected | Public base URL used in generated proxy links for production deployments |
 | `LOG_LEVEL` | Optional | `info` | Logging level: `debug`, `info`, `warn`, `error` |
-| `SUBSENSE_ENCRYPTION_KEY` | **Required** | — | Secret used to encrypt/decrypt user-provided provider API keys inside manifest URLs |
+| `SUBSENSE_ENCRYPTION_KEY` | **Required** | - | Secret used to encrypt/decrypt user-provided provider API keys inside manifest URLs |
 | `SUBTITLE_SOURCES` | Optional | `wyzie,betaseries,yify,tvsubtitles,subsource,subdl,animetosho,opensubtitles,gestdown` | Comma-separated list of enabled providers |
-| `WYZIE_API_KEYS` | **Required** | — | Wyzie API key(s), comma-separated for pool rotation (get keys at https://sub.wyzie.io/redeem) |
+| `WYZIE_API_KEYS` | **Required** | - | Wyzie API key(s), comma-separated for pool rotation (get keys at https://sub.wyzie.io/redeem) |
 | `WYZIE_SOURCES` | Optional | All available sources | Override the Wyzie sources queried by the `wyzie` provider |
-| `BETASERIES_API_KEY` | Optional | — | Server-side BetaSeries API key for BetaSeries subtitle searches |
-| `ANIDB_CLIENT` | Optional | — | AniDB HTTP API client name (register at [anidb.net](https://anidb.net)). Required for AnimeTosho TV episode search, and for long-running series that AniDB numbers 1..N while Stremio splits them into seasons |
-| `ANIDB_CLIENT_VER` | Optional | — | AniDB HTTP API client version. Required alongside `ANIDB_CLIENT` |
-| `SUBSOURCE_API_KEY` | Optional | — | Server-side SubSource API key for local testing/admin validation only. End users normally provide their own key through addon configuration |
+| `BETASERIES_API_KEY` | Optional | - | Server-side BetaSeries API key for BetaSeries subtitle searches |
+| `ANIDB_CLIENT` | Optional | - | AniDB HTTP API client name (register at [anidb.net](https://anidb.net)). Gives AnimeTosho the show title used to reject sequels, and is required for long-running series that AniDB numbers 1..N while Stremio splits them into seasons |
+| `ANIDB_CLIENT_VER` | Optional | - | AniDB HTTP API client version. Required alongside `ANIDB_CLIENT` |
+| `SUBSOURCE_API_KEY` | Optional | - | Server-side SubSource API key for local testing/admin validation only. End users normally provide their own key through addon configuration |
 | `WEB_CONCURRENCY` | Optional | `1` | Request workers to fork. `auto` uses CPU count minus one |
 | `REDIS_URL` | Optional | `redis://127.0.0.1:6379` | Redis connection string |
 | `CACHE_DB_PATH` | Optional | `./data/subsense-cache.db` | Subtitle cache database |
@@ -218,7 +218,7 @@ These are the high-level providers that SubSense can use:
 | `yify` | YIFY/YTS movie subtitles | No |
 | `tvsubtitles` | TVsubtitles.net for TV series | No |
 | `betaseries` | French/English subtitles | Yes (server-side) |
-| `animetosho` | Anime subtitles from embedded MKV tracks (AnimeTosho.org) | No (but `ANIDB_CLIENT` needed for TV episodes) |
+| `animetosho` | Anime subtitles from embedded MKV tracks (animetosho.net) | No (`ANIDB_CLIENT` needed for long-running series) |
 | `opensubtitles` | Direct OpenSubtitles Legacy API (movies + TV) | No |
 | `gestdown` | Gestdown REST API for TV subtitles | Yes (server-side `TVDB_API_KEY` OR `TMDB_API_KEY`) |
 

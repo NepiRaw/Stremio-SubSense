@@ -15,7 +15,6 @@ const { log } = require('./src/utils');
 const { initWyzieSources } = require('./src/providers/WyzieProvider');
 const { init: initAnimeLists } = require('./src/utils/animeLists');
 const { initAnidbCache, isAnidbConfigured } = require('./src/utils/anidbApi');
-const { initDetailCache } = require('./src/utils/animetoshoApi');
 const { installWarpRotationHost } = require('./src/utils/warpRotation');
 
 const { registerDefaultProviders } = require('./src/providers');
@@ -85,12 +84,8 @@ async function bootstrap() {
             initAnidbCache(infra.metaDb).catch((err) => log('warn', `[server] AniDB cache init failed: ${err.message}`))
         );
     } else {
-        log('info', '[server] AniDB not configured (ANIDB_CLIENT / ANIDB_CLIENT_VER not set) — AnimeTosho TV episode search disabled, movies still available');
+        log('info', '[server] AniDB not configured (ANIDB_CLIENT / ANIDB_CLIENT_VER not set): AnimeTosho runs without AniDB titles and absolute episode numbering');
     }
-
-    initTasks.push(
-        initDetailCache(infra.metaDb).catch((err) => log('warn', `[server] AT detail cache init failed: ${err.message}`))
-    );
 
     await Promise.allSettled(initTasks);
 

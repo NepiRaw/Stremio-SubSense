@@ -71,28 +71,6 @@ async function purgeStaleCache() {
     log('info', `[AniDB] Episode cache purged for parser v${PARSER_VERSION}`);
 }
 
-/**
- * Get the AniDB episode ID (eid) for a specific anime + episode number.
- * Uses libSQL cache first, falls back to AniDB HTTP API.
- */
-async function getEpisodeId(anidbId, episodeNum) {
-    if (!isAnidbConfigured()) return null;
-    if (!db) throw new Error('AniDB cache not initialized');
-
-    const cached = await db.execute(
-        'SELECT eid FROM anidb_episodes WHERE anidb_id = ? AND episode_num = ?',
-        [anidbId, episodeNum]
-    );
-    if (cached.rows.length > 0) {
-        return cached.rows[0].eid;
-    }
-
-    const episodes = await loadAnime(anidbId);
-    if (!episodes) return null;
-    const match = episodes.find(e => e.epno === episodeNum);
-    return match ? match.eid : null;
-}
-
 /** Regular episode count of an anime, null when AniDB is not configured or the anime is unknown. */
 async function getEpisodeCount(anidbId) {
     const meta = await animeMeta(anidbId);
@@ -227,4 +205,4 @@ async function isAnimeCached(anidbId) {
     return result.rows.length > 0;
 }
 
-module.exports = { initAnidbCache, getEpisodeId, getEpisodeCount, getAnimeTitle, isAnimeCached, isAnidbConfigured, parseEpisodes, parseMainTitle };
+module.exports = { initAnidbCache, getEpisodeCount, getAnimeTitle, isAnimeCached, isAnidbConfigured, parseEpisodes, parseMainTitle };
