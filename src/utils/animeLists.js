@@ -6,6 +6,9 @@
  * Source: https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-mini.json
  *
  * Loaded once at startup, refreshed every 24 hours.
+ *
+ * Kitsu ids map to IMDB through the Kitsu addon's own per-episode mapping: Fribb's season offsets
+ * and Cinemeta positions disagree with it on split-cour seasons and long-running series.
  */
 
 const { log } = require('../utils');
@@ -16,6 +19,12 @@ const FETCH_TIMEOUT_MS = 30000;
 const MIN_EXPECTED_ENTRIES = 10000;
 const MIN_EXPECTED_IMDB_KEYS = 4000;
 const SPOT_CHECK_IMDB_ID = 'tt0388629';
+
+const KITSU_META_URL = 'https://anime-kitsu.strem.fun/meta/series';
+const KITSU_FETCH_TIMEOUT_MS = 8000;
+const KITSU_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const KITSU_CACHE_MAX = 500;
+const kitsuCache = new Map();
 
 /** Upstream sends imdb_id as an array, as a comma-joined string, or as a bare string. */
 function imdbIdsOf(entry) {
@@ -139,6 +148,56 @@ function isAnime(imdbId) {
     return !!(imdbIndex && imdbIndex.has(imdbId));
 }
 
+/**
+ * `kitsu:<id>` or `kitsu:<id>:<episode>` -> { imdbId, season, episode, type }, or null when the
+ * Kitsu addon gives that id or episode no IMDB mapping.
+ */
+async function resolveKitsuId(stremioId) {
+    const kitsuId = String(stremioId).split(':')[1];
+    if (!/^\d+$/.test(kitsuId || '')) return null;
+
+    const mapping = await kitsuMapping(kitsuId);
+    const target = mapping && mapping.videos.get(stremioId);
+    if (!target) return null;
+
+    return mapping.isMovie
+        ? { imdbId: target.imdbId, season: null, episode: null, type: 'movie' }
+        : { imdbId: target.imdbId, season: target.season, episode: target.episode, type: 'series' };
+}
+
+/** Video id -> IMDB target, cached per Kitsu id. A 404 is cached as empty, a failed fetch is not. */
+async function kitsuMapping(kitsuId) {
+    const hit = kitsuCache.get(kitsuId);
+    if (hit && Date.now() - hit.at < KITSU_CACHE_TTL_MS) return hit.mapping;
+
+    let mapping = null;
+    try {
+        const res = await fetch(`${KITSU_META_URL}/kitsu:${kitsuId}.json`, {
+            signal: AbortSignal.timeout(KITSU_FETCH_TIMEOUT_MS),
+            headers: { 'User-Agent': 'SubSense-Stremio/2.0' }
+        });
+        if (res.ok) mapping = kitsuVideoTargets((await res.json())?.meta);
+        else if (res.status === 404) mapping = { isMovie: false, videos: new Map() };
+    } catch (err) {
+        log('debug', `[AnimeLists] Kitsu ${kitsuId}: ${err.message}`);
+    }
+    if (!mapping) return null;
+
+    if (kitsuCache.size >= KITSU_CACHE_MAX) kitsuCache.delete(kitsuCache.keys().next().value);
+    kitsuCache.set(kitsuId, { mapping, at: Date.now() });
+    return mapping;
+}
+
+function kitsuVideoTargets(meta) {
+    const videos = new Map();
+    for (const video of (meta && meta.videos) || []) {
+        const imdbId = video.imdb_id || meta.imdb_id;
+        if (!/^tt\d+$/.test(imdbId || '') || !(video.imdbSeason >= 0) || !(video.imdbEpisode > 0)) continue;
+        videos.set(video.id, { imdbId, season: video.imdbSeason, episode: video.imdbEpisode });
+    }
+    return { isMovie: meta?.type === 'movie', videos };
+}
+
 async function init() {
     await loadAnimeLists();
     refreshTimer = setInterval(loadAnimeLists, REFRESH_INTERVAL_MS);
@@ -152,4 +211,4 @@ function shutdown() {
     }
 }
 
-module.exports = { init, shutdown, getAnimeListReady, getAnidbIdForImdb, isAnime };
+module.exports = { init, shutdown, getAnimeListReady, getAnidbIdForImdb, isAnime, resolveKitsuId };

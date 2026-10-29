@@ -8,6 +8,7 @@ const inflight = require('../cache/inflight');
 const metrics = require('../infra/metrics');
 const { prioritizeByLanguage, buildEntries } = require('../utils/format');
 const { validateWyzieUrls } = require('../utils/validateWyzie');
+const { resolveKitsuId } = require('../utils/animeLists');
 const { statsService, track } = require('../stats');
 
 let encryptConfig = null;
@@ -68,7 +69,11 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const startedAt = Date.now();
     metrics.recordRequest();
 
-    const parsed = parseStremioId(args.id);
+    const parsed = String(args.id).startsWith('kitsu:') ? await resolveKitsuId(args.id) : parseStremioId(args.id);
+    if (!parsed) {
+        log('info', `[Request] no IMDB mapping for ${args.id}`);
+        return { subtitles: [] };
+    }
     const languages = parsedConfig.languages || [];
     const userAgent = parsedConfig._userAgent || '';
     const filename = (args.extra && args.extra.filename) || null;
