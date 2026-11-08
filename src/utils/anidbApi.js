@@ -205,4 +205,15 @@ async function isAnimeCached(anidbId) {
     return result.rows.length > 0;
 }
 
-module.exports = { initAnidbCache, getEpisodeCount, getAnimeTitle, isAnimeCached, isAnidbConfigured, parseEpisodes, parseMainTitle };
+/** AniDB episode id of a regular episode, null when AniDB is not configured or the episode is unknown. */
+async function getEpisodeId(anidbId, episodeNum) {
+    try {
+        if (!(await animeMeta(anidbId))) return null;
+        const row = await db.execute('SELECT eid FROM anidb_episodes WHERE anidb_id = ? AND episode_num = ?', [anidbId, episodeNum]);
+        return row.rows.length ? Number(row.rows[0].eid) : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+module.exports = { initAnidbCache, getEpisodeCount, getAnimeTitle, getEpisodeId, isAnimeCached, isAnidbConfigured, parseEpisodes, parseMainTitle };

@@ -10,7 +10,8 @@
 const { BaseProvider, SubtitleResult } = require('./BaseProvider');
 const { log } = require('../utils');
 const { getAnidbIdForImdb, getAnimeListReady, isAnime } = require('../utils/animeLists');
-const { getAnimeTitle } = require('../utils/anidbApi');
+const anidbApi = require('../utils/anidbApi');
+const { getAnimeTitle } = anidbApi;
 const xyzApi = require('../utils/animetoshoXyzApi');
 const absoluteEpisode = require('../utils/absoluteEpisode');
 const { scoreReleaseSeason, parse: parseMedia } = require('../utils/mediaParser');
@@ -18,6 +19,7 @@ const { getByAlpha3B, getDisplayName, toAlpha3B } = require('../languages');
 
 const XYZ_SEARCH_THRESHOLD = parseInt(process.env.ANIMETOSHO_XYZ_SEARCH_THRESHOLD, 10) || 3;
 const XYZ_MAX_OFFSET = parseInt(process.env.ANIMETOSHO_XYZ_MAX_OFFSET, 10) || 4000;
+const XYZ_EPISODE_BUDGET = 2;
 const XYZ_BACKGROUND_DETAILS = 12;
 const XYZ_PAGE_DELAY_MS = 800;
 
@@ -142,11 +144,25 @@ class AnimeToshoProvider extends BaseProvider {
         return subtitles.filter(s => languages.includes(s.language));
     }
 
+    /**
+     * The episode's own releases first, then the season packs. When the episode releases already
+     * cover the requested languages, the packs only add languages, so they move to the background.
+     */
     async _searchSources(query, mapping, cacheKey) {
         const seenLanguageKeys = new Set();
-        const xyzResults = await this._fetchXyzSubtitles(mapping.anidbId, query, seenLanguageKeys, cacheKey);
+        const episodeResults = await this._fetchEpisodeSubtitles(mapping.anidbId, query, seenLanguageKeys, cacheKey);
+        this._mergeIntoCache(cacheKey, episodeResults);
+
+        let packResults = [];
+        if (episodeResults.length && this._filterByLanguages(episodeResults, query.languages).length) {
+            this._collectPacksInBackground(mapping.anidbId, query, cacheKey, seenLanguageKeys);
+        } else {
+            packResults = await this._fetchXyzSubtitles(mapping.anidbId, query, seenLanguageKeys, cacheKey);
+        }
+
+        const xyzResults = [...episodeResults, ...packResults];
         if (xyzResults.length) {
-            this._putInCache(cacheKey, xyzResults);
+            this._mergeIntoCache(cacheKey, packResults);
             return this._filterByLanguages(xyzResults, query.languages);
         }
 
@@ -198,9 +214,9 @@ class AnimeToshoProvider extends BaseProvider {
     }
 
     /** Collect the releases the deadline had no time for, so the next request sees them. */
-    _collectXyzInBackground(releases, query, cacheKey, seenLanguageKeys) {
+    _collectXyzInBackground(releases, query, cacheKey, seenLanguageKeys, { episodeReleases = false } = {}) {
         this._track(query, (async () => {
-            const found = await this._collectXyzSubtitles(releases, query, seenLanguageKeys, { background: true });
+            const found = await this._collectXyzSubtitles(releases, query, seenLanguageKeys, { background: true, episodeReleases });
             this._mergeIntoCache(cacheKey, found);
             if (found.length) {
                 log('info', `[AnimeTosho-XYZ] Background added ${found.length} subs for ${cacheKey}`);
@@ -228,19 +244,49 @@ class AnimeToshoProvider extends BaseProvider {
         return scored.map(s => s.release);
     }
 
+    /** Releases listed under the AniDB episode id, multisub then most seeded first. Movies have no episode id. */
+    async _fetchEpisodeSubtitles(anidbId, query, seenLanguageKeys, cacheKey) {
+        if (query.season == null || query.episode == null || !anidbId) return [];
+        try {
+            const eid = await anidbApi.getEpisodeId(anidbId, query.absoluteEpisode ?? query.episode);
+            if (!eid) return [];
+            const releases = await xyzApi.searchByEpisodeId(eid);
+            const ordered = releases
+                .filter(r => r.metadata_fetched)
+                .sort((a, b) => (b.is_multisub_release ? 1 : 0) - (a.is_multisub_release ? 1 : 0) || (b.seeders || 0) - (a.seeders || 0));
+            if (!ordered.length) return [];
+
+            const budget = ordered.slice(0, XYZ_EPISODE_BUDGET);
+            const results = await this._collectXyzSubtitles(budget, query, seenLanguageKeys, { cacheKey, episodeReleases: true });
+            log('info', `[AnimeTosho-XYZ] Episode ${eid}: ${results.length} subs from ${budget.length} of ${releases.length} releases`);
+            return results;
+        } catch (err) {
+            log('error', `[AnimeTosho-XYZ] Episode search error: ${err.message}`);
+            return [];
+        }
+    }
+
+    _collectPacksInBackground(anidbId, query, cacheKey, seenLanguageKeys) {
+        this._track(query, (async () => {
+            const found = await this._fetchXyzSubtitles(anidbId, query, seenLanguageKeys, null, { background: true });
+            this._mergeIntoCache(cacheKey, found);
+            if (found.length) log('info', `[AnimeTosho-XYZ] Background packs added ${found.length} subs for ${cacheKey}`);
+        })().catch(err => log('debug', `[AnimeTosho-XYZ] Background packs failed: ${err.message}`)));
+    }
+
     /**
      * Subtitle tracks from .xyz, searched by AniDB anime id. The packs that carry tracks hold a
      * whole season, so the episode is matched on the file inside the release, never on the release.
      */
-    async _fetchXyzSubtitles(anidbId, query, seenLanguageKeys, cacheKey = null) {
+    async _fetchXyzSubtitles(anidbId, query, seenLanguageKeys, cacheKey = null, { background = false } = {}) {
         if (!anidbId) return [];
         try {
-            const releases = await xyzApi.searchByAnidbId(anidbId);
+            const releases = await xyzApi.searchByAnidbId(anidbId, 0, { background });
             const ordered = this._orderXyzReleases(releases, query.season);
             if (!ordered.length) return [];
 
             const budget = ordered.slice(0, XYZ_SEARCH_THRESHOLD);
-            const results = await this._collectXyzSubtitles(budget, query, seenLanguageKeys, { cacheKey });
+            const results = await this._collectXyzSubtitles(budget, query, seenLanguageKeys, { cacheKey, background });
             log('info', `[AnimeTosho-XYZ] ${results.length} subs from ${budget.length} of ${releases.length} releases`);
             return results;
         } catch (err) {
@@ -252,9 +298,10 @@ class AnimeToshoProvider extends BaseProvider {
     /**
      * Fetch each release detail and keep the tracks on the file that holds the wanted episode.
      * A cacheKey opts into the early exit: stop once the requested languages are covered and
-     * leave the rest of the ranked pool to the background.
+     * leave the rest of the ranked pool to the background. episodeReleases marks releases listed
+     * under the episode id, where a one-file release is the episode whatever its title says.
      */
-    async _collectXyzSubtitles(releases, query, seenLanguageKeys, { cacheKey = null, background = false } = {}) {
+    async _collectXyzSubtitles(releases, query, seenLanguageKeys, { cacheKey = null, background = false, episodeReleases = false } = {}) {
         const byEpisode = query.season != null && query.episode != null;
         const results = [];
 
@@ -272,7 +319,7 @@ class AnimeToshoProvider extends BaseProvider {
 
             // A one-file release whose title names the episode is that episode, whatever the file is called.
             const wholeRelease = byEpisode && (detail.files || []).length === 1 &&
-                this._titleMatchesEpisode(release.title || '', query);
+                (episodeReleases || this._titleMatchesEpisode(release.title || '', query));
 
             for (const track of tracks) {
                 if (track.forced || !track.languageCode) continue;
@@ -314,7 +361,7 @@ class AnimeToshoProvider extends BaseProvider {
 
             if (cacheKey && i < releases.length - 1 &&
                 this._filterByLanguages(results, query.languages).length > 0) {
-                this._collectXyzInBackground(releases.slice(i + 1), query, cacheKey, seenLanguageKeys);
+                this._collectXyzInBackground(releases.slice(i + 1), query, cacheKey, seenLanguageKeys, { episodeReleases });
                 break;
             }
         }

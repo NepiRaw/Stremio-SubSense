@@ -75,8 +75,32 @@ async function feedFetch(url, { background = false } = {}) {
 
 const slimRelease = (r) => ({
     id: r.id, title: r.title, metadata_fetched: r.metadata_fetched,
-    is_multisub_release: r.is_multisub_release, is_batch: r.is_batch
+    is_multisub_release: r.is_multisub_release, is_batch: r.is_batch, seeders: r.seeders
 });
+
+/** Releases of one AniDB episode. Season packs carry no episode id, so they are not listed here. */
+async function searchByEpisodeId(eid, { background = false } = {}) {
+    const key = `ss:at:eid:${eid}`;
+    const cached = await safe(r => r.get(key), null);
+    if (cached) {
+        try { return JSON.parse(cached); } catch (_) { /* refetch below */ }
+    }
+    try {
+        const response = await feedFetch(`${XYZ_FEED_URL}/v1/releases?eid=${eid}&limit=${PAGE_SIZE}`, { background });
+        if (!response) return [];
+        if (!response.ok) {
+            log('warn', `[AT-XYZ] Episode ${eid}: HTTP ${response.status}`);
+            return [];
+        }
+        const json = await response.json();
+        const releases = (Array.isArray(json.data) ? json.data : []).map(slimRelease);
+        await safe(r => r.set(key, JSON.stringify(releases), 'EX', SERIES_NEWEST_TTL_S), null);
+        return releases;
+    } catch (err) {
+        log('error', `[AT-XYZ] Episode search error: ${err.message}`);
+        return [];
+    }
+}
 
 /** One page of releases, newest first. The feed caps a page at 100 whatever ?limit asks for. */
 async function searchByAnidbId(anidbId, offset = 0, { background = false } = {}) {
@@ -232,6 +256,7 @@ function storageUrlForPath(path) {
 
 module.exports = {
     searchByAnidbId,
+    searchByEpisodeId,
     getReleaseDetail,
     extractSubtitles,
     countMediainfoTracks,
