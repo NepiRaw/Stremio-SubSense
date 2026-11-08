@@ -183,7 +183,7 @@ function extractSubtitles(detail) {
                 format: fmt === 'ssa' ? 'ass' : fmt === 'subrip' ? 'srt' : fmt,
                 forced: !!info.forced,
                 isDefault: !!info.default,
-                title: info.title || null
+                title: info.title || info.name || null
             });
         }
     }
