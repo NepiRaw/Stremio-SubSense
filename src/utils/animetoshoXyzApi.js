@@ -15,7 +15,7 @@
 
 const { log } = require('../utils');
 const rateLimit = require('../infra/rate-limit');
-const { redis, isHealthy } = require('../infra/redis');
+const { redis, isHealthy, safe } = require('../infra/redis');
 
 const XYZ_FEED_URL = 'https://feed.animetosho.net/json';
 const XYZ_STORAGE_URL = 'https://storage.animetosho.net';
@@ -29,6 +29,11 @@ const FEED_PAUSE_MS = parseInt(process.env.ANIMETOSHO_FEED_PAUSE_MS, 10) || 1500
 const FEED_MAX_WAIT_MS = parseInt(process.env.ANIMETOSHO_FEED_MAX_WAIT_MS, 10) || 4000;
 const FEED_SLOT_KEY = 'animetosho-feed';
 const FEED_PAUSE_KEY = 'ss:at:pause';
+
+// The newest page gains releases as episodes air; older pages rarely change.
+const SERIES_NEWEST_TTL_S = 60 * 60;
+const SERIES_OLDER_TTL_S = 12 * 60 * 60;
+const RELEASE_PENDING_TTL_S = 30 * 60;
 
 let localPauseUntil = 0;
 
@@ -68,8 +73,18 @@ async function feedFetch(url, { background = false } = {}) {
     return response;
 }
 
+const slimRelease = (r) => ({
+    id: r.id, title: r.title, metadata_fetched: r.metadata_fetched,
+    is_multisub_release: r.is_multisub_release, is_batch: r.is_batch
+});
+
 /** One page of releases, newest first. The feed caps a page at 100 whatever ?limit asks for. */
 async function searchByAnidbId(anidbId, offset = 0, { background = false } = {}) {
+    const key = `ss:at:series:${anidbId}:${offset}`;
+    const cached = await safe(r => r.get(key), null);
+    if (cached) {
+        try { return JSON.parse(cached); } catch (_) { /* refetch below */ }
+    }
     try {
         const url = `${XYZ_FEED_URL}/v1/series/anidb/${anidbId}?limit=${PAGE_SIZE}&offset=${offset}`;
         const response = await feedFetch(url, { background });
@@ -79,15 +94,61 @@ async function searchByAnidbId(anidbId, offset = 0, { background = false } = {})
             return [];
         }
         const json = await response.json();
-        return json.data?.releases || [];
+        const releases = (json.data?.releases || []).map(slimRelease);
+        const ttl = offset === 0 ? SERIES_NEWEST_TTL_S : SERIES_OLDER_TTL_S;
+        await safe(r => r.set(key, JSON.stringify(releases), 'EX', ttl), null);
+        return releases;
     } catch (err) {
         log('error', `[AT-XYZ] Series search error: ${err.message}`);
         return [];
     }
 }
 
+/** What the subtitle path reads from a release detail: file names, subtitle attachments, mediainfo track counts. */
+function slimDetail(detail) {
+    return {
+        id: detail.id,
+        torrent_name: detail.torrent_name || null,
+        status: detail.status || null,
+        files: (detail.files || []).map(f => ({
+            filename: f.filename || f.name || null,
+            attachments: (f.attachments || [])
+                .filter(a => a.type === 'subtitle' && a.url)
+                .map(a => ({ id: a.id, type: a.type, url: a.url, info: a.info || {} })),
+            mediainfoTracks: f.info?.mediainfoj?.subtitles?.length || 0
+        }))
+    };
+}
+
+async function readStoredDetail(releaseId) {
+    try {
+        const { metaDb } = require('../infra/db');
+        const row = await metaDb.execute('SELECT data FROM at_release_tracks WHERE release_id = ?', [releaseId]);
+        if (row.rows.length) return JSON.parse(row.rows[0].data);
+    } catch (_) { /* unreadable: fetch instead */ }
+    const pending = await safe(r => r.get(`ss:at:rel:${releaseId}`), null);
+    try { return pending ? JSON.parse(pending) : null; } catch (_) { return null; }
+}
+
+/** A complete release never changes, so it is kept; one still processing is fetched again later. */
+async function storeDetail(releaseId, slim) {
+    const data = JSON.stringify(slim);
+    if (slim.status === 'complete') {
+        try {
+            const { metaDb } = require('../infra/db');
+            await metaDb.execute('INSERT OR REPLACE INTO at_release_tracks (release_id, data) VALUES (?, ?)', [releaseId, data]);
+        } catch (err) {
+            log('debug', `[AT-XYZ] Detail ${releaseId} not stored: ${err.message}`);
+        }
+        return;
+    }
+    await safe(r => r.set(`ss:at:rel:${releaseId}`, data, 'EX', RELEASE_PENDING_TTL_S), null);
+}
+
 /** Release detail with its per-file attachment list. Speculative callers pass background: true. */
 async function getReleaseDetail(releaseId, { background = false } = {}) {
+    const stored = await readStoredDetail(releaseId);
+    if (stored) return stored;
     try {
         const response = await feedFetch(`${XYZ_FEED_URL}?show=torrent&id=${releaseId}`, { background });
         if (!response) return null;
@@ -95,7 +156,9 @@ async function getReleaseDetail(releaseId, { background = false } = {}) {
             log('warn', `[AT-XYZ] Detail ${releaseId}: HTTP ${response.status}`);
             return null;
         }
-        return await response.json();
+        const slim = slimDetail(await response.json());
+        await storeDetail(releaseId, slim);
+        return slim;
     } catch (err) {
         log('error', `[AT-XYZ] Detail ${releaseId}: ${err.message}`);
         return null;
@@ -131,6 +194,7 @@ function extractSubtitles(detail) {
 function countMediainfoTracks(detail) {
     let count = 0;
     for (const file of detail?.files || []) {
+        if (typeof file.mediainfoTracks === 'number') { count += file.mediainfoTracks; continue; }
         const mediainfo = file.info && file.info.mediainfoj;
         if (mediainfo && Array.isArray(mediainfo.subtitles)) count += mediainfo.subtitles.length;
     }

@@ -155,6 +155,12 @@ CREATE TABLE IF NOT EXISTS at_torrent_details (
     data        TEXT NOT NULL,
     created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
+
+CREATE TABLE IF NOT EXISTS at_release_tracks (
+    release_id  INTEGER PRIMARY KEY,
+    data        TEXT NOT NULL,
+    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
 `;
 
 const SCHEMAS = { cache: CACHE_SCHEMA, stats: STATS_SCHEMA, meta: META_SCHEMA };

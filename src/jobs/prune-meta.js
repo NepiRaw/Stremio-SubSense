@@ -18,6 +18,7 @@ function intEnv(name, fallback) {
 
 const TARGETS = [
     { table: 'at_torrent_details', column: 'created_at', ttlDays: () => intEnv('META_TTL_AT_DAYS', 90) },
+    { table: 'at_release_tracks',  column: 'created_at', ttlDays: () => intEnv('META_TTL_AT_DAYS', 90) },
     { table: 'anidb_episodes',     column: 'created_at', ttlDays: () => intEnv('META_TTL_ANIDB_DAYS', 180) },
     { table: 'anidb_anime_meta',   column: 'fetched_at', ttlDays: () => intEnv('META_TTL_ANIDB_DAYS', 180) }
 ];
