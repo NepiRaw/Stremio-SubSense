@@ -14,51 +14,66 @@
  */
 
 const { log } = require('../utils');
+const rateLimit = require('../infra/rate-limit');
+const { redis, isHealthy } = require('../infra/redis');
 
 const XYZ_FEED_URL = 'https://feed.animetosho.net/json';
 const XYZ_STORAGE_URL = 'https://storage.animetosho.net';
 const PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = 15000;
 const USER_AGENT = 'SubSense-Stremio/2.0';
-const RATE_LIMIT_MS = 2500;
 
-const pending = { foreground: [], background: [] };
-let running = false;
-let lastDetailTime = 0;
+// Measured upstream limit (per IP): 1 request every 2.5 s holds, 1 every 2 s is blocked within two minutes, a block clears in ~11 s
+const FEED_INTERVAL_MS = parseInt(process.env.ANIMETOSHO_FEED_INTERVAL_MS, 10) || 3000;
+const FEED_PAUSE_MS = parseInt(process.env.ANIMETOSHO_FEED_PAUSE_MS, 10) || 15000;
+const FEED_MAX_WAIT_MS = parseInt(process.env.ANIMETOSHO_FEED_MAX_WAIT_MS, 10) || 4000;
+const FEED_SLOT_KEY = 'animetosho-feed';
+const FEED_PAUSE_KEY = 'ss:at:pause';
+
+let localPauseUntil = 0;
+
+async function isPaused() {
+    if (Date.now() < localPauseUntil) return true;
+    if (!isHealthy()) return false;
+    try { return (await redis.pttl(FEED_PAUSE_KEY)) > 0; } catch (_) { return false; }
+}
+
+async function pauseFeed() {
+    localPauseUntil = Date.now() + FEED_PAUSE_MS;
+    if (isHealthy()) await redis.set(FEED_PAUSE_KEY, '1', 'PX', FEED_PAUSE_MS).catch(() => {});
+}
 
 /**
- * One request at a time, spaced by RATE_LIMIT_MS, foreground before background so a speculative
- * pass cannot push a user-facing fetch past the provider deadline.
+ * Every feed call shares one pace across the cluster and stops while a 429 pause runs.
+ * A viewer call waits up to FEED_MAX_WAIT_MS for its turn, a background call only takes a free slot.
+ * Returns null when the call was not made.
  */
-async function runDetailQueue() {
-    if (running) return;
-    running = true;
-    try {
-        for (;;) {
-            const job = pending.foreground.shift() || pending.background.shift();
-            if (!job) return;
-
-            const wait = RATE_LIMIT_MS - (Date.now() - lastDetailTime);
-            if (wait > 0) await new Promise(r => setTimeout(r, wait));
-            lastDetailTime = Date.now();
-
-            let detail = null;
-            try { detail = await _fetchReleaseDetail(job.releaseId); } catch (_) { }
-            job.resolve(detail);
-        }
-    } finally {
-        running = false;
+async function feedFetch(url, { background = false } = {}) {
+    if (await isPaused()) return null;
+    const waitMs = await rateLimit.reserve(FEED_SLOT_KEY, FEED_INTERVAL_MS, { maxWaitMs: background ? 0 : FEED_MAX_WAIT_MS });
+    if (waitMs < 0) {
+        if (!background) log('info', `[AT-XYZ] Feed busy, skipped ${url.replace(XYZ_FEED_URL, '')}`);
+        return null;
     }
+    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+    const response = await fetch(url, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { 'User-Agent': USER_AGENT }
+    });
+    if (response.status === 429) {
+        await pauseFeed();
+        log('warn', `[AT-XYZ] HTTP 429, feed paused for ${FEED_PAUSE_MS / 1000}s`);
+        return null;
+    }
+    return response;
 }
 
 /** One page of releases, newest first. The feed caps a page at 100 whatever ?limit asks for. */
-async function searchByAnidbId(anidbId, offset = 0) {
+async function searchByAnidbId(anidbId, offset = 0, { background = false } = {}) {
     try {
         const url = `${XYZ_FEED_URL}/v1/series/anidb/${anidbId}?limit=${PAGE_SIZE}&offset=${offset}`;
-        const response = await fetch(url, {
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { 'User-Agent': USER_AGENT }
-        });
+        const response = await feedFetch(url, { background });
+        if (!response) return [];
         if (!response.ok) {
             log('warn', `[AT-XYZ] Series ${anidbId}: HTTP ${response.status}`);
             return [];
@@ -72,19 +87,10 @@ async function searchByAnidbId(anidbId, offset = 0) {
 }
 
 /** Release detail with its per-file attachment list. Speculative callers pass background: true. */
-function getReleaseDetail(releaseId, { background = false } = {}) {
-    return new Promise((resolve) => {
-        pending[background ? 'background' : 'foreground'].push({ releaseId, resolve });
-        runDetailQueue();
-    });
-}
-
-async function _fetchReleaseDetail(releaseId) {
+async function getReleaseDetail(releaseId, { background = false } = {}) {
     try {
-        const response = await fetch(`${XYZ_FEED_URL}?show=torrent&id=${releaseId}`, {
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { 'User-Agent': USER_AGENT }
-        });
+        const response = await feedFetch(`${XYZ_FEED_URL}?show=torrent&id=${releaseId}`, { background });
+        if (!response) return null;
         if (!response.ok) {
             log('warn', `[AT-XYZ] Detail ${releaseId}: HTTP ${response.status}`);
             return null;

@@ -329,12 +329,6 @@ router.get('/subtitle/:format/*', async (req, res) => {
                 if (Array.isArray(v)) v.forEach((vv) => vv != null && proxiedUrl.searchParams.append(k, vv));
                 else proxiedUrl.searchParams.set(k, v);
             }
-            if (proxiedUrl.hostname === 'sub.wyzie.io') {
-                const wyzieKey = process.env.WYZIE_API_KEY;
-                if (wyzieKey && !proxiedUrl.searchParams.has('key')) {
-                    proxiedUrl.searchParams.set('key', wyzieKey);
-                }
-            }
 
             const fetchHeaders = {};
             const response = await proxyFetch(proxiedUrl.toString(), {

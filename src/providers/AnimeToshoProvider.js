@@ -336,7 +336,7 @@ class AnimeToshoProvider extends BaseProvider {
 
             for (let offset = xyzApi.PAGE_SIZE; offset <= XYZ_MAX_OFFSET && budget > 0; offset += xyzApi.PAGE_SIZE) {
                 await new Promise(r => setTimeout(r, XYZ_PAGE_DELAY_MS));
-                const page = await xyzApi.searchByAnidbId(anidbId, offset);
+                const page = await xyzApi.searchByAnidbId(anidbId, offset, { background: true });
                 if (!page.length) break;
 
                 const named = this._orderXyzReleases(page, query.season)

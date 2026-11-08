@@ -1,6 +1,6 @@
 {
   "name": "subsense",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "Stremio subtitle addon that aggregates subtitles from multiple sources",
   "main": "server.js",
   "scripts": {

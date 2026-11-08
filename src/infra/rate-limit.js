@@ -14,13 +14,16 @@ const PREFIX = 'ss:rl:';
 const SLOT_TTL_MS = 60_000;
 const MAX_WAIT_MS = 60_000;
 
-// Reserve the next free slot and return how long the caller must wait for it.
+// Reserve the next free slot and return how long the caller must wait for it, or -1 without
+// reserving when that wait would exceed maxWait (negative maxWait means no limit).
 const RESERVE_LUA = `
 local now = tonumber(ARGV[1])
 local interval = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
+local maxWait = tonumber(ARGV[4])
 local slot = tonumber(redis.call('GET', KEYS[1]) or '0')
 if slot < now then slot = now end
+if maxWait >= 0 and slot - now > maxWait then return -1 end
 redis.call('SET', KEYS[1], slot + interval, 'PX', ttl)
 return slot - now
 `;
@@ -36,9 +39,10 @@ function ensureCommand() {
 
 const localSlots = new Map();
 
-function localReserve(key, intervalMs) {
+function localReserve(key, intervalMs, maxWaitMs) {
     const now = Date.now();
     const slot = Math.max(now, localSlots.get(key) || 0);
+    if (maxWaitMs >= 0 && slot - now > maxWaitMs) return -1;
     localSlots.set(key, slot + intervalMs);
     return slot - now;
 }
@@ -46,19 +50,21 @@ function localReserve(key, intervalMs) {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
- * Reserve a slot for `key` and return the milliseconds to wait before using it.
+ * Reserve a slot for `key` and return the milliseconds to wait before using it, or -1 when
+ * the wait would exceed `maxWaitMs` (nothing is reserved then).
  * Falls back to per-process spacing when Redis is unavailable.
  */
-async function reserve(key, intervalMs) {
+async function reserve(key, intervalMs, { maxWaitMs = -1 } = {}) {
     if (!(intervalMs > 0)) return 0;
     if (isHealthy()) {
         try {
             ensureCommand();
-            const waitMs = await redis.reserveSlot(PREFIX + key, Date.now(), intervalMs, SLOT_TTL_MS + intervalMs);
-            return Math.max(0, Math.min(Number(waitMs) || 0, MAX_WAIT_MS));
+            const waitMs = Number(await redis.reserveSlot(PREFIX + key, Date.now(), intervalMs, SLOT_TTL_MS + intervalMs, maxWaitMs));
+            if (waitMs < 0) return -1;
+            return Math.max(0, Math.min(waitMs || 0, MAX_WAIT_MS));
         } catch (_) { /* fall through to local spacing */ }
     }
-    return localReserve(key, intervalMs);
+    return localReserve(key, intervalMs, maxWaitMs);
 }
 
 /** Reserve a slot and wait for it. */
