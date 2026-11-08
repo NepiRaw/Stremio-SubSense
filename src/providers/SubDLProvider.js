@@ -296,7 +296,7 @@ class SubDLProvider extends BaseProvider {
     }
 
     _archivePath(sub) {
-        return (sub.url || '').replace(/^\/+/, '');
+        return (sub.url || '').replace(/^\/+/, '').split('?')[0];
     }
 
     // A pack holds several tracks per episode; `track` tells the proxy which one this line is.

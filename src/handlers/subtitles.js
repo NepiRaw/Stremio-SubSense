@@ -81,6 +81,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
     const subdlApiKey = parsedConfig.subdlApiKey || null;
     const wyzieApiKey = parsedConfig.wyzieApiKey || null;
     const encryptedApiKey = apiKey && encryptConfig ? safeEncrypt({ apiKey }) : null;
+    const encryptedSubdlKey = subdlApiKey && encryptConfig ? safeEncrypt({ apiKey: subdlApiKey }) : null;
 
     const sessionInfo = parsedConfig.userId ? `session=${parsedConfig.userId}` : 'no-session';
     const idTag = `${parsed.imdbId}${parsed.season != null ? `:${parsed.season}:${parsed.episode}` : ''}`;
@@ -94,6 +95,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
         videoFilename: filename,
         contentType: parsed.type,
         encryptedSubsourceKey: encryptedApiKey,
+        encryptedSubdlKey,
         maxPerLang: parsedConfig.maxSubtitles || 0
     };
 

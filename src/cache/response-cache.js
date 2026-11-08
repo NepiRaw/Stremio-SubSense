@@ -42,12 +42,15 @@ function redisKey(cacheKey) {
 function materialize(cachedSubtitles, ctx = {}) {
     const {
         encryptedSubsourceKey = null,
+        encryptedSubdlKey = null,
         videoFilename = null,
         contentType = 'series',
         maxPerLang = 0
     } = ctx;
 
-    const rendered = require('../utils/format').renderEntries(cachedSubtitles);
+    const format = require('../utils/format');
+    const rendered = format.renderEntries(cachedSubtitles).map(sub =>
+        (sub.url && sub.url.includes(format.SUBDL_PROXY_PATH) ? { ...sub, url: format.withSubdlToken(sub.url, encryptedSubdlKey) } : sub));
 
     let result;
     if (encryptedSubsourceKey) {

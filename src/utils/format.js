@@ -222,6 +222,21 @@ function appendQuery(url, key, value) {
     return url + (url.includes('?') ? '&' : '?') + `${key}=${encoded}`;
 }
 
+const SUBDL_PROXY_PATH = '/api/subdl/proxy/';
+const LEGACY_SUBDL_KEY_RE = /%3Fapi_key%3D[A-Za-z0-9_-]*/gi;
+
+function withoutSubdlKey(url) {
+    return url && url.includes(SUBDL_PROXY_PATH) ? url.replace(LEGACY_SUBDL_KEY_RE, '') : url;
+}
+
+/** The requester's own SubDL key, encrypted, so a shared cached URL never carries anyone's key. */
+function withSubdlToken(url, encryptedKey) {
+    if (!url || !url.includes(SUBDL_PROXY_PATH)) return url;
+    const clean = withoutSubdlKey(url);
+    if (!encryptedKey) return clean;
+    return `${clean}${clean.includes('?') ? '&' : '?'}k=${encodeURIComponent(encryptedKey)}`;
+}
+
 function withSubsourcePlaceholder(url) {
     if (!url || url.indexOf('/subsource/') === -1) return url;
     return url
@@ -257,5 +272,8 @@ module.exports = {
     formatForStremio,
     buildEntries,
     renderEntries,
+    withoutSubdlKey,
+    withSubdlToken,
+    SUBDL_PROXY_PATH,
     PROXY_BASE_URL
 };

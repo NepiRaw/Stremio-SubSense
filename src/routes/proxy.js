@@ -26,6 +26,7 @@ const { Agent, buildConnector, setGlobalDispatcher } = require('undici');
 const { log } = require('../../src/utils');
 const { warpFetch } = require('../utils/warpFetch');
 const { subdlFetch, recordArchiveMiss } = require('../utils/subdlFetch');
+const { withoutSubdlKey, SUBDL_PROXY_PATH } = require('../utils/format');
 const { redis, isHealthy, safe } = require('../infra/redis');
 const {
     extractSubtitleEntries,
@@ -183,6 +184,10 @@ const VOLATILE_WYZIE_PARAMS = ['tok', 'tk', 'key'];
 function subtitleCacheKey(format, targetUrl, rawQuery) {
     const params = new URLSearchParams(rawQuery || '');
     if (targetUrl.startsWith('https://sub.wyzie.io/')) VOLATILE_WYZIE_PARAMS.forEach((p) => params.delete(p));
+    if (targetUrl.includes(SUBDL_PROXY_PATH)) {
+        params.delete('k');
+        targetUrl = withoutSubdlKey(targetUrl);
+    }
     const query = params.toString();
     return `subtitle:${format}:${targetUrl}${query ? `?${query}` : ''}`;
 }
@@ -657,9 +662,13 @@ router.get('/subdl/proxy/*', async (req, res) => {
     if (qIdx >= 0) subdlPath = subdlPath.slice(0, qIdx);
 
     subdlPath = decodeURIComponent(subdlPath).replace(/^\/+/, '');
+    const embedded = subdlPath.indexOf('?');
+    const legacyKey = embedded >= 0 ? new URLSearchParams(subdlPath.slice(embedded + 1)).get('api_key') : null;
+    if (embedded >= 0) subdlPath = subdlPath.slice(0, embedded);
     if (!subdlPath) return res.status(400).send('Missing subtitle path');
 
-    const { season, episode, filename, track } = req.query;
+    const { season, episode, filename, track, k } = req.query;
+    const apiKey = decryptSubdlToken(k) || legacyKey;
     const fmt = pickFmt(req);
     const fileHint = (typeof filename === 'string' && filename.trim())
         ? filename.trim().toLowerCase() : 'nofilename';
@@ -667,7 +676,7 @@ router.get('/subdl/proxy/*', async (req, res) => {
 
     try {
         const { entry, hit } = await resolveEntry(cacheKey,
-            () => fetchSubdl(subdlPath, { season, episode, filename, track, fmt }));
+            () => fetchSubdl(subdlPath, { season, episode, filename, track, fmt, apiKey }));
         sendCached(res, entry, hit ? 'hit' : 'miss');
     } catch (err) {
         log('error', `[proxy/subdl] ${err.message}`);
@@ -675,8 +684,18 @@ router.get('/subdl/proxy/*', async (req, res) => {
     }
 });
 
-async function fetchSubdl(subdlPath, { season, episode, filename, track, fmt = 'vtt' }) {
-    const downloadUrl = `https://dl.subdl.com/${subdlPath}`;
+function decryptSubdlToken(token) {
+    if (!token || typeof token !== 'string' || !decryptConfig) return null;
+    try {
+        const cfg = decryptConfig(token);
+        return (cfg && typeof cfg.apiKey === 'string' && cfg.apiKey) || null;
+    } catch (_) {
+        return null;
+    }
+}
+
+async function fetchSubdl(subdlPath, { season, episode, filename, track, fmt = 'vtt', apiKey = null }) {
+    const downloadUrl = `https://dl.subdl.com/${subdlPath}${apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : ''}`;
     const dlRes = await subdlFetch(downloadUrl, {
         headers: { 'User-Agent': 'SubSense/2.0' }
     });
