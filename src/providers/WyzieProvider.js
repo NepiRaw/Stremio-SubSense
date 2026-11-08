@@ -174,7 +174,7 @@ class WyzieKeyPool {
             const data = await res.json();
             const raw = Array.isArray(data) ? data : data?.sources;
             const sources = Array.isArray(raw)
-                ? raw.map(s => (typeof s === 'string' ? s : s.name || s.id)).filter(Boolean)
+                ? withoutExcluded(raw.map(s => (typeof s === 'string' ? s : s.name || s.id)).filter(Boolean))
                 : null;
             if (sources && sources.length > 0) {
                 const s = this.state.get(key) || {};
@@ -259,35 +259,27 @@ const SOURCE_METADATA = {
     'ajatttools':    { display: 'AjattTools',     icon: null,                url: null },
     'tvsubtitles':   { display: 'TVsubtitles',    icon: 'tvsubtitles.png',   url: 'https://www.tvsubtitles.net' },
     'indexsubtitle': { display: 'IndexSubtitle',  icon: null,                url: 'https://indexsubtitle.cc' },
+    'subtitlecat':   { display: 'SubtitleCat',    icon: null,                url: 'https://www.subtitlecat.com' },
     'ai':            { display: 'AI',             icon: null,                url: null }
 };
 
-// Codename → real source name mapping (Wyzie API returns NATO codenames in search results)
-// Inferred from /api/status capabilities + /sources tiers:
-//   charlie (free, movies+TV) = opensubtitles
-//   lima (free, movies+TV) = indexsubtitle (indexsubtitle.cc)
-//   kilo (free, TV only) = tvsubtitles
-//   india (paid, movies only) = yify
-//   hotel (paid, TV only) = gestdown
-//   bravo (paid, movies+TV) = subf2m
-//   golf (paid, movies+TV) = kitsunekko
+// Wyzie returns NATO codenames; only codenames whose provider is known are mapped
 const SOURCE_CODENAME_MAP = {
     'charlie': 'opensubtitles',
-    'lima':    'indexsubtitle',
-    'kilo':    'tvsubtitles',
+    'quebec':  'subtitlecat',
+    'tango':   'gestdown',
     'india':   'yify',
-    'hotel':   'gestdown',
-    'bravo':   'subf2m',
-    'golf':    'kitsunekko',
     'ai':      'ai'
 };
 
-const FALLBACK_FREE_SOURCES = 'opensubtitles,indexsubtitle';
+const EXCLUDED_SOURCES = new Set(['oscar']);
+const withoutExcluded = (sources) => sources.filter(s => !EXCLUDED_SOURCES.has(s));
 
-const FALLBACK_SOURCES = [
-    'subf2m', 'opensubtitles', 'kitsunekko',
-    'gestdown', 'yify', 'tvsubtitles'
-];
+const FALLBACK_FREE_SOURCES = 'charlie,quebec';
+
+const FALLBACK_SOURCES = ['charlie', 'quebec'];
+
+const _warnedCodenames = new Set();
 
 let _cachedSources = null;
 let _cachedFreeSources = null;   // string[] from API "free" field
@@ -331,14 +323,14 @@ async function fetchWyzieSources() {
         const data = await response.json();
         if (!data || !Array.isArray(data.sources) || data.sources.length === 0) return null;
 
-        const sources = data.sources.filter(s => typeof s === 'string' && s.length > 0).map(s => s.toLowerCase());
+        const sources = withoutExcluded(data.sources.filter(s => typeof s === 'string' && s.length > 0).map(s => s.toLowerCase()));
 
         // Store free/paid tier info from API
         if (Array.isArray(data.free) && data.free.length > 0) {
-            _cachedFreeSources = data.free.map(s => s.toLowerCase());
+            _cachedFreeSources = withoutExcluded(data.free.map(s => s.toLowerCase()));
         }
         if (Array.isArray(data.paid) && data.paid.length > 0) {
-            _cachedPaidSources = data.paid.map(s => s.toLowerCase());
+            _cachedPaidSources = withoutExcluded(data.paid.map(s => s.toLowerCase()));
         }
         if (Array.isArray(data.tiered) && data.tiered.length > 0) {
             _cachedTiered = data.tiered;
@@ -667,10 +659,10 @@ class WyzieProvider extends BaseProvider {
             headers: { 'Accept': 'application/json' }
         });
         if (!response.ok && response.status !== 429 && response.status !== 403) {
-            if (response.status === 400) {
+            if (response.status === 400 || response.status === 404) {
                 const body = await response.json().catch(() => ({}));
                 log('info', `[WyzieProvider] HTTP ${response.status} - ${body.message || 'No subtitles found'} - ${body.details || ''}`);
-                return { ok: false, status: 400, headers: response.headers, json: async () => [] };
+                return { ok: false, status: response.status, headers: response.headers, json: async () => [] };
             }
             throw new Error(`API_${response.status}`);
         }
@@ -768,9 +760,9 @@ class WyzieProvider extends BaseProvider {
         const resolved = SOURCE_CODENAME_MAP[source.toLowerCase()];
         if (resolved) {
             source = resolved;
-        } else if (source !== 'unknown' && !SOURCE_METADATA[source.toLowerCase()]) {
-            // Unknown codename — not in our map and not a known source name
-            log('warn', `[WyzieProvider] Unknown source codename: "${source}" — add to SOURCE_CODENAME_MAP`);
+        } else if (source !== 'unknown' && !SOURCE_METADATA[source.toLowerCase()] && !_warnedCodenames.has(source)) {
+            _warnedCodenames.add(source);
+            log('warn', `[WyzieProvider] Unknown source codename: "${source}", add it to SOURCE_CODENAME_MAP`);
         }
 
         const langCode = sub.lang || sub.language || 'und';
