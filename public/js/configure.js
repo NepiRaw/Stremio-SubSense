@@ -1110,7 +1110,7 @@ async function validateWyzieApiKey(apiKey, silent = false) {
         if (result.valid) {
             wyzieApiKey = apiKey;
             wyzieApiKeyValid = true;
-            const info = result.remaining !== undefined ? ` (${result.remaining}/${result.limit} remaining)` : '';
+            const info = result.remaining !== undefined ? ` (${result.remaining}${result.limit ? '/' + result.limit : ''} remaining)` : '';
             updateWyzieStatus('valid', `Valid ${result.keyType} key${info}`);
             if (!silent) showToast('Wyzie API key validated!');
         } else {

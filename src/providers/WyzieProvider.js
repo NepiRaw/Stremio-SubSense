@@ -11,7 +11,7 @@ const { mapStremioToWyzie } = require('../languages');
 // Wyzie Key Pool
 // =====================================================
 
-const WYZIE_USAGE_ENDPOINT = 'https://store.wyzie.io/api/usage-limit';
+const WYZIE_USAGE_ENDPOINT = 'https://sub.wyzie.io/usage';
 const WYZIE_SOURCES_ENDPOINT = 'https://sub.wyzie.io/sources';
 
 class WyzieKeyPool {
@@ -145,14 +145,14 @@ class WyzieKeyPool {
 
     async detectKeyType(key) {
         try {
-            const res = await fetch(`${WYZIE_USAGE_ENDPOINT}?api_key=${encodeURIComponent(key)}`, {
+            const res = await fetch(`${WYZIE_USAGE_ENDPOINT}?key=${encodeURIComponent(key)}`, {
                 signal: AbortSignal.timeout(5000)
             });
             if (!res.ok) return 'unknown';
             const data = await res.json();
             const s = this.state.get(key) || {};
             s.keyType = data.key_type || 'unknown';
-            s.remaining = data.remainingRequests ?? s.remaining;
+            s.remaining = data.balance ?? s.remaining;
             s.limit = data.daily_limit ?? 1000;
             s.resetAt = s.resetAt || this._nextMidnightUTC();
             s.lastChecked = Date.now();
@@ -439,16 +439,17 @@ class WyzieProvider extends BaseProvider {
         const attempts = 2;
         for (let i = 0; i < attempts; i++) {
             try {
-                const res = await fetch(`${WYZIE_USAGE_ENDPOINT}?api_key=${encodeURIComponent(apiKey)}`, {
+                const res = await fetch(`${WYZIE_USAGE_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
                     signal: AbortSignal.timeout(10000)
                 });
-                if (!res.ok) return { valid: false, error: 'Key not recognized' };
+                if (res.status === 401 || res.status === 403) return { valid: false, error: 'Key not recognized' };
+                if (!res.ok) return { valid: false, error: 'Validation service unavailable - try again' };
                 const data = await res.json();
                 return {
                     valid: true,
                     keyType: data.key_type || 'unknown',
-                    remaining: data.remainingRequests,
-                    limit: data.daily_limit
+                    remaining: data.balance,
+                    limit: data.daily_limit ?? null
                 };
             } catch (err) {
                 if (i < attempts - 1) continue;
