@@ -178,6 +178,15 @@ const PROXY_REDIS_PREFIX = 'ss:px:';
 const PROXY_REDIS_TTL_S = Math.floor(PROXY_CACHE_TTL_MS / 1000);
 const PROXY_REDIS_MAX_BYTES = parseInt(process.env.PROXY_REDIS_MAX_BYTES, 10) || 4 * 1024 * 1024;
 
+const VOLATILE_WYZIE_PARAMS = ['tok', 'tk', 'key'];
+
+function subtitleCacheKey(format, targetUrl, rawQuery) {
+    const params = new URLSearchParams(rawQuery || '');
+    if (targetUrl.startsWith('https://sub.wyzie.io/')) VOLATILE_WYZIE_PARAMS.forEach((p) => params.delete(p));
+    const query = params.toString();
+    return `subtitle:${format}:${targetUrl}${query ? `?${query}` : ''}`;
+}
+
 const proxyCache = new Map(); // key -> { content, contentType, headers, storedAt, bytes }
 const inflight = new Map();   // key -> Promise<entry>
 let cacheBytes = 0;
@@ -304,10 +313,11 @@ router.get('/subtitle/:format/*', async (req, res) => {
         ? req.originalUrl.slice(pIdx + prefix.length)
         : (req.params[0] || '');
     const qIdx = originalUrl.indexOf('?');
+    const rawQuery = qIdx >= 0 ? originalUrl.slice(qIdx + 1) : '';
     if (qIdx >= 0) originalUrl = originalUrl.slice(0, qIdx);
     if (!originalUrl) return res.status(400).send('Missing subtitle URL');
 
-    const cacheKey = `subtitle:${format}:${originalUrl}`;
+    const cacheKey = subtitleCacheKey(format, originalUrl, rawQuery);
 
     try {
         assertAllowedSubtitleUrl(originalUrl);
@@ -848,5 +858,5 @@ async function fetchGestdown(subtitleId, fmt = 'vtt') {
 }
 
 module.exports = router;
-module.exports._cache = { cacheGet, cacheSet, sharedGet, sharedSet, getProxyCacheStats, getSharedCacheStats, PROXY_CACHE_MAX_BYTES };
+module.exports._cache = { cacheGet, cacheSet, sharedGet, sharedSet, getProxyCacheStats, getSharedCacheStats, subtitleCacheKey, PROXY_CACHE_MAX_BYTES };
 module.exports.getProxyCacheStats = getProxyCacheStats;
