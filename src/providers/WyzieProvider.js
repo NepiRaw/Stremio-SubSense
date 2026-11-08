@@ -5,7 +5,7 @@ const redisInfra = require('../infra/redis');
 
 const WYZIE_POOL_KEY = 'ss:wyzie:pool';
 const { log } = require('../utils');
-const { mapStremioToWyzie } = require('../languages');
+const { mapStremioToWyzie, toAlpha2 } = require('../languages');
 
 // =====================================================
 // Wyzie Key Pool
@@ -765,8 +765,8 @@ class WyzieProvider extends BaseProvider {
             log('warn', `[WyzieProvider] Unknown source codename: "${source}", add it to SOURCE_CODENAME_MAP`);
         }
 
-        const langCode = sub.lang || sub.language || 'und';
-        const language = langCode.substring(0, 2).toLowerCase();
+        const baseCode = String(sub.lang || sub.language || 'und').split('-')[0].toLowerCase();
+        const language = baseCode.length === 2 ? baseCode : (toAlpha2(baseCode)?.split('-')[0] || 'und');
         let formatInfo = this._detectFormatFromUrl(sub.url);
         const rawFileName = sub.fileName || null;
         const fileName = this._isUsefulFileName(rawFileName) ? rawFileName : null;
