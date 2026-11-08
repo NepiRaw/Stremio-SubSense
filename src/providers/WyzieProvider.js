@@ -243,6 +243,7 @@ const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10000;
 const POOL_TTL_MS = (parseInt(process.env.L2_TTL_DAYS, 10) || 7) * 24 * 60 * 60 * 1000;
 const POOL_MAX_ENTRIES = parseInt(process.env.WYZIE_POOL_MAX, 10) || 5000;
+const POOL_MAX_SUBS = parseInt(process.env.WYZIE_POOL_MAX_SUBS, 10) || 100000;
 
 const SOURCE_METADATA = {
     'opensubtitles': { display: 'OpenSubtitles', icon: 'opensubtitles.ico', url: 'https://www.opensubtitles.com' },
@@ -409,6 +410,7 @@ class WyzieProvider extends BaseProvider {
         super('wyzie', options);
         this.keyPool = WyzieKeyPool.fromEnv();
         this._pool = new Map();
+        this._poolSubs = 0;
         this._keyTypeCache = new Map();
         this._inflight = new Map();
     }
@@ -712,18 +714,28 @@ class WyzieProvider extends BaseProvider {
         const entry = this._pool.get(key);
         if (!entry) return null;
         if (Date.now() - entry.timestamp > POOL_TTL_MS) {
-            this._pool.delete(key);
+            this._poolDelete(key);
             return null;
         }
         return entry.subtitles;
     }
 
+    _poolDelete(key) {
+        const entry = this._pool.get(key);
+        if (!entry) return;
+        this._poolSubs -= entry.subtitles.length;
+        this._pool.delete(key);
+    }
+
+    /** Oldest titles go first, until both the title cap and the subtitle cap hold. */
     _poolSet(key, subtitles) {
-        if (this._pool.size >= POOL_MAX_ENTRIES) {
-            const oldest = this._pool.keys().next().value;
-            this._pool.delete(oldest);
+        this._poolDelete(key);
+        if (subtitles.length > POOL_MAX_SUBS) return;
+        while (this._pool.size > 0 && (this._pool.size >= POOL_MAX_ENTRIES || this._poolSubs + subtitles.length > POOL_MAX_SUBS)) {
+            this._poolDelete(this._pool.keys().next().value);
         }
         this._pool.set(key, { subtitles, timestamp: Date.now() });
+        this._poolSubs += subtitles.length;
     }
 
     // =====================================================
@@ -832,6 +844,7 @@ class WyzieProvider extends BaseProvider {
 
     clearCache() {
         this._pool.clear();
+        this._poolSubs = 0;
         this._inflight.clear();
         log('debug', '[WyzieProvider] Pool cache cleared');
     }
@@ -839,6 +852,8 @@ class WyzieProvider extends BaseProvider {
     getCacheStats() {
         return {
             poolSize: this._pool.size,
+            poolSubs: this._poolSubs,
+            poolMaxSubs: POOL_MAX_SUBS,
             inflightSize: this._inflight.size,
             poolMaxEntries: POOL_MAX_ENTRIES,
             poolTtlMs: POOL_TTL_MS,
