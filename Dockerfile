@@ -8,7 +8,8 @@ WORKDIR /app
 RUN mkdir -p /app/data
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gnupg dbus ca-certificates && \
+    curl gnupg dbus ca-certificates libjemalloc2 && \
+    ln -s "$(ls /usr/lib/*-linux-gnu/libjemalloc.so.2)" /usr/local/lib/libjemalloc.so.2 && \
     # Install Cloudflare WARP client
     curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ bookworm main" > /etc/apt/sources.list.d/cloudflare-client.list && \

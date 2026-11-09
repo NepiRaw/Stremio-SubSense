@@ -67,4 +67,10 @@ else
     echo "[WARP] Disabled (set WARP_ENABLED=true to enable)"
 fi
 
+# jemalloc hands freed memory back to the OS; glibc keeps most of it after Buffer churn.
+if [ -f /usr/local/lib/libjemalloc.so.2 ]; then
+    export LD_PRELOAD=/usr/local/lib/libjemalloc.so.2
+    export MALLOC_CONF=background_thread:true
+fi
+
 exec "$@"
