@@ -69,8 +69,7 @@ const PLAN = {
     ],
     meta: [
         { table: 'anidb_episodes', columns: ['anidb_id', 'episode_num', 'eid', 'title_en', 'created_at'] },
-        { table: 'anidb_anime_meta', columns: ['anidb_id', 'total_eps', 'fetched_at'] },
-        { table: 'at_torrent_details', columns: ['torrent_id', 'data', 'created_at'] }
+        { table: 'anidb_anime_meta', columns: ['anidb_id', 'total_eps', 'fetched_at'] }
     ]
 };
 

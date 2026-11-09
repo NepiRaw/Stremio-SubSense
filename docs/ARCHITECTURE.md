@@ -790,8 +790,8 @@ Every variable has a default in code. Only `SUBSENSE_ENCRYPTION_KEY` and `WYZIE_
 | `STATS_DB_PATH` | `{DB_DIR}/subsense-stats.db` | Analytics, user tracking, content log |
 | `META_DB_PATH` | `{DB_DIR}/subsense-meta.db` | Provider metadata caches |
 | `L2_TTL_DAYS` | 7 | Subtitle cache retention |
-| `META_TTL_ANIDB_DAYS` | 30 | AniDB metadata retention |
-| `META_TTL_AT_DAYS` | 30 | AnimeTosho detail retention |
+| `META_TTL_ANIDB_DAYS` | 180 | AniDB metadata retention |
+| `META_TTL_AT_DAYS` | 90 | AnimeTosho release track retention |
 
 ### 12.4 Redis
 

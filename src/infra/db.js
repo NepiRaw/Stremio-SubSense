@@ -150,12 +150,6 @@ CREATE TABLE IF NOT EXISTS anidb_anime_meta (
     fetched_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 
-CREATE TABLE IF NOT EXISTS at_torrent_details (
-    torrent_id  INTEGER PRIMARY KEY,
-    data        TEXT NOT NULL,
-    created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-);
-
 CREATE TABLE IF NOT EXISTS at_release_tracks (
     release_id  INTEGER PRIMARY KEY,
     data        TEXT NOT NULL,
