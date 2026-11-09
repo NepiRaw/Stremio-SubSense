@@ -144,7 +144,7 @@ async function handleSubtitlesRequest(args, parsedConfig) {
             languages,
             filename,
             apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
-            encryptedApiKeys: { subsource: encryptedApiKey }
+            encryptedApiKeys: { subsource: encryptedApiKey, subdl: encryptedSubdlKey }
         }, { dedupeKey: cacheKey });
 
         const { formatted, languageMatch } = buildFormatted(result.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });
@@ -237,6 +237,7 @@ function mergeFormatted(existing, extra) {
 function scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encryptedApiKey, cacheKey) {
     const subdlApiKey = parsedConfig.subdlApiKey || null;
     const wyzieApiKey = parsedConfig.wyzieApiKey || null;
+    const encryptedSubdlKey = subdlApiKey && encryptConfig ? safeEncrypt({ apiKey: subdlApiKey }) : null;
     setImmediate(async () => {
         // One refresh per key across all workers; the rest keep serving the stale entry.
         if (!await inflight.acquire(`${cacheKey}:refresh`, 30)) return;
@@ -248,7 +249,7 @@ function scheduleRefresh(parsed, languages, parsedConfig, filename, apiKey, encr
                 languages,
                 filename,
                 apiKeys: { subsource: apiKey, subdl: subdlApiKey, wyzie: wyzieApiKey },
-                encryptedApiKeys: { subsource: encryptedApiKey }
+                encryptedApiKeys: { subsource: encryptedApiKey, subdl: encryptedSubdlKey }
             }, { dedupeKey: `${cacheKey}:refresh` });
 
             const { formatted } = buildFormatted(res.subtitles, languages, 0, { keepAss: parsedConfig.keepAss });

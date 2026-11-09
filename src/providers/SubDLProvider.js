@@ -98,7 +98,8 @@ class SubDLProvider extends BaseProvider {
                 season: query.season,
                 episode: query.episode,
                 languages: subdlLangs,
-                filename: query.filename || null
+                filename: query.filename || null,
+                token: (query.encryptedApiKeys && query.encryptedApiKeys.subdl) || null
             });
             this._recordRequest(true, Date.now() - startedAt, subtitles.length);
             return { subtitles };
@@ -109,7 +110,7 @@ class SubDLProvider extends BaseProvider {
     }
 
     async _searchSubtitles(opts) {
-        const { apiKey, imdbId, season, episode, languages, filename } = opts;
+        const { apiKey, imdbId, season, episode, languages, filename, token } = opts;
 
         const params = {
             api_key: apiKey,
@@ -160,7 +161,8 @@ class SubDLProvider extends BaseProvider {
         return allSubs.map(sub => this._toSubtitleResult(sub, {
             season,
             episode,
-            filename
+            filename,
+            token
         }));
     }
 
@@ -255,9 +257,8 @@ class SubDLProvider extends BaseProvider {
     }
 
     _toSubtitleResult(sub, opts) {
-        const { season, episode, filename } = opts;
+        const { season, episode, filename, token } = opts;
 
-        // Build proxy URL (SubDL downloads are public, no API key needed)
         const releaseName = sub.release_name || sub.name || '';
         const track = this._declaredTrack(sub);
 
@@ -277,7 +278,7 @@ class SubDLProvider extends BaseProvider {
 
         const releases = Array.isArray(sub.releases) ? sub.releases : [];
 
-        return new SubtitleResult({
+        const result = new SubtitleResult({
             id: `subdl-${this._subtitleIdFromUrl(sub.url)}`,
             url: downloadUrl,
             language: lang ? lang.alpha2 : (sub.language || sub.lang || '').toLowerCase(),
@@ -293,6 +294,8 @@ class SubDLProvider extends BaseProvider {
             format: 'srt',
             needsConversion: false
         });
+        if (token) result.subdlToken = token;
+        return result;
     }
 
     _archivePath(sub) {

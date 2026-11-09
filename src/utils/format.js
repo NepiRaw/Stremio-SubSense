@@ -126,6 +126,7 @@ function buildEntries(subtitles, opts = {}) {
         if (declared === 'hi') meta.h = 1;
         if (declared === 'forced') meta.x = 1;
         if (sub.trackName) meta.t = sub.trackName;
+        if (sub.subdlToken) meta.k = sub.subdlToken;
 
         const emit = (fmt, url) => out.push({ url, lang, source, f: (fmt || 'srt').toLowerCase(), ...meta });
 
@@ -229,7 +230,13 @@ function withoutSubdlKey(url) {
     return url && url.includes(SUBDL_PROXY_PATH) ? url.replace(LEGACY_SUBDL_KEY_RE, '') : url;
 }
 
-/** The requester's own SubDL key, encrypted, so a shared cached URL never carries anyone's key. */
+function legacySubdlKey(url) {
+    if (!url || !url.includes(SUBDL_PROXY_PATH)) return null;
+    const m = url.match(/%3Fapi_key%3D([A-Za-z0-9_-]+)/i);
+    return m ? m[1] : null;
+}
+
+/** An encrypted SubDL key, so a shared cached URL never carries anyone's plain key. */
 function withSubdlToken(url, encryptedKey) {
     if (!url || !url.includes(SUBDL_PROXY_PATH)) return url;
     const clean = withoutSubdlKey(url);
@@ -274,6 +281,7 @@ module.exports = {
     renderEntries,
     withoutSubdlKey,
     withSubdlToken,
+    legacySubdlKey,
     SUBDL_PROXY_PATH,
     PROXY_BASE_URL
 };

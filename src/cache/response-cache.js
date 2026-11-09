@@ -35,6 +35,19 @@ function redisKey(cacheKey) {
     return PREFIX + cacheKey;
 }
 
+function subdlTokenFor(entry, encryptedSubdlKey, legacyTokens) {
+    if (encryptedSubdlKey) return encryptedSubdlKey;
+    if (entry && entry.k) return entry.k;
+    const plain = require('../utils/format').legacySubdlKey(entry && entry.url);
+    if (!plain) return null;
+    if (!legacyTokens.has(plain)) {
+        let token = null;
+        try { token = require('../utils/crypto').encryptConfig({ apiKey: plain }); } catch (_) { /* served keyless */ }
+        legacyTokens.set(plain, token);
+    }
+    return legacyTokens.get(plain);
+}
+
 /**
  * Rewrite or strip SubSource placeholders for this caller, re-sort by filename similarity,
  * then cap per language.
@@ -49,8 +62,11 @@ function materialize(cachedSubtitles, ctx = {}) {
     } = ctx;
 
     const format = require('../utils/format');
-    const rendered = format.renderEntries(cachedSubtitles).map(sub =>
-        (sub.url && sub.url.includes(format.SUBDL_PROXY_PATH) ? { ...sub, url: format.withSubdlToken(sub.url, encryptedSubdlKey) } : sub));
+    const legacyTokens = new Map();
+    const rendered = format.renderEntries(cachedSubtitles).map((sub, i) =>
+        (sub.url && sub.url.includes(format.SUBDL_PROXY_PATH)
+            ? { ...sub, url: format.withSubdlToken(sub.url, subdlTokenFor(cachedSubtitles[i], encryptedSubdlKey, legacyTokens)) }
+            : sub));
 
     let result;
     if (encryptedSubsourceKey) {
