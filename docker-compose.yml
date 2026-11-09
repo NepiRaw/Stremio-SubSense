@@ -55,6 +55,7 @@ services:
       - REDIS_URL=redis://subsense-redis:6379
       # - L1_TTL_HOURS=6                       # Response cache TTL
       # - L1_STALE_AFTER_HOURS=2               # Served but refreshed in the background past this age
+      # - L1_EMPTY_TTL_SECONDS=300             # A search that found nothing is remembered this long
 
       # --- Stats (optional) ---
       # - STATS_ENABLED=minimal                # true | minimal | false

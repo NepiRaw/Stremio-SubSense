@@ -24,6 +24,7 @@ function intEnv(name, fallback) {
 const TTL_MS = intEnv('L1_TTL_HOURS', 6) * HOUR_MS;
 const STALE_AFTER_MS = intEnv('L1_STALE_AFTER_HOURS', 2) * HOUR_MS;
 const TTL_SECONDS = Math.floor(TTL_MS / 1000);
+const EMPTY_TTL_SECONDS = intEnv('L1_EMPTY_TTL_SECONDS', 300);
 
 function buildKey(imdbId, season, episode, languages, opts = {}) {
     const langs = (languages || []).slice().sort().join(',');
@@ -133,11 +134,16 @@ async function get(cacheKey, ctx = {}) {
     };
 }
 
-/** Store an already quality-sorted, placeholder-bearing list. */
+/**
+ * Store an already quality-sorted, placeholder-bearing list. An empty list is kept briefly so
+ * client retries do not re-run every provider, and never replaces a non-empty entry.
+ */
 async function set(cacheKey, subtitles) {
-    if (!Array.isArray(subtitles) || subtitles.length === 0) return false;
+    if (!Array.isArray(subtitles)) return false;
     const payload = JSON.stringify({ t: Date.now(), subs: subtitles });
-    const res = await safe(r => r.set(redisKey(cacheKey), payload, 'EX', TTL_SECONDS), null);
+    const res = subtitles.length > 0
+        ? await safe(r => r.set(redisKey(cacheKey), payload, 'EX', TTL_SECONDS), null)
+        : await safe(r => r.set(redisKey(cacheKey), payload, 'EX', EMPTY_TTL_SECONDS, 'NX'), null);
     return res === 'OK';
 }
 
