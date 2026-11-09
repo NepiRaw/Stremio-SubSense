@@ -8,7 +8,7 @@
  * whole table. Runs in batches under a deadline.
  */
 
-const { cacheDb } = require('../infra/db');
+const { cacheDb, incrementalVacuum } = require('../infra/db');
 const store = require('../cache/subtitle-store');
 const track = require('../stats/track');
 const { log } = require('../../src/utils');
@@ -63,7 +63,7 @@ async function run({ deadline = Infinity } = {}) {
     }
 
     if (removed > 0) {
-        try { await cacheDb.execute(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`); }
+        try { await incrementalVacuum(cacheDb, VACUUM_PAGES); }
         catch (err) { log('debug', `[cleanup-cache] incremental_vacuum failed: ${err.message}`); }
         log('info', `[cleanup-cache] removed ${removed} expired rows in ${Date.now() - started}ms`);
     }

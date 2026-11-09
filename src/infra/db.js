@@ -354,6 +354,11 @@ function close() {
     initPromise = null;
 }
 
+/** Return up to `pages` free pages to the OS. `execute()` steps the pragma once and frees a single page. */
+async function incrementalVacuum(client, pages) {
+    await client.executeMultiple(`PRAGMA incremental_vacuum(${Math.max(1, Math.floor(pages))});`);
+}
+
 module.exports = {
     cacheDb: clients.cache,
     statsDb: clients.stats,
@@ -364,6 +369,7 @@ module.exports = {
     kvSet,
     KV,
     verifyPragmas,
+    incrementalVacuum,
     rotationTablesWithForeignKeys,
     close,
     PATHS,
